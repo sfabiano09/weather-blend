@@ -40,7 +40,7 @@
   .chips{display:flex;flex-wrap:wrap;gap:6px}
   .chip{font-size:12px;border-radius:999px;padding:4px 9px;border:1px solid var(--line);background:#fff;white-space:nowrap;cursor:pointer}
   .chip .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:1px;background:#9ca3af}
-  .chip.ok .dot{background:var(--green)} .chip.fail .dot{background:var(--red)} .chip.wait .dot{background:var(--amber)}
+  .chip.ok .dot{background:var(--green)} .chip.stale .dot{background:#eab308} .chip.fail .dot{background:var(--red)} .chip.wait .dot{background:var(--amber)}
   .chip.off{opacity:.55}
   .alert{background:#fef2f2;border:1px solid #fecaca;color:#7f1d1d;border-radius:12px;padding:10px 12px;margin-top:12px}
   .alert b{display:block}
@@ -345,9 +345,10 @@ function compass(deg){ if(!isNum(deg)) return '–'; return ['N','NNE','NE','ENE
 function esc(s){ return String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 async function getJSON(url, opts={}){
-  const ctrl = new AbortController(); const to = setTimeout(()=>ctrl.abort(), 20000);
+  const ctrl = new AbortController(); const to = setTimeout(()=>ctrl.abort(), opts.timeout || 20000);
+  const {timeout, ...fopts} = opts;
   try{
-    const r = await fetch(url, {...opts, signal: ctrl.signal});
+    const r = await fetch(url, {...fopts, signal: ctrl.signal});
     if(!r.ok){
       let msg = 'HTTP '+r.status;
       try{ const j = await r.json(); const m = j.reason||j.detail||j.title||j.message||j.Message||(j.errors&&j.errors[0]&&j.errors[0].error&&j.errors[0].error.message); if(m) msg += ' – '+m; }catch(e){}
@@ -359,6 +360,24 @@ async function getJSON(url, opts={}){
     throw e;
   } finally { clearTimeout(to); }
 }
+// Open-Meteo: retry once, remember the last good answer, and fall back to it (up to 12 h old) if the service won't answer
+const sleep = ms => new Promise(r=>setTimeout(r, ms));
+async function omJSON(url, key){
+  const ck = 'om:'+key;
+  let err;
+  for(let attempt=0; attempt<2; attempt++){
+    try{
+      const d = await getJSON(url, {timeout: 25000});
+      try{ localStorage.setItem('wb:'+ck, JSON.stringify({at:Date.now(), data:d})); }
+      catch(e){ try{ Object.keys(localStorage).filter(k=>k.startsWith('wb:om:')).forEach(k=>localStorage.removeItem(k)); localStorage.setItem('wb:'+ck, JSON.stringify({at:Date.now(), data:d})); }catch(e2){} }
+      return d;
+    }catch(e){ err = e; if(/^HTTP 400/.test(e.message)) break; if(attempt===0) await sleep(2500); }
+  }
+  const c = store.get(ck);
+  if(c && Date.now()-c.at < 12*3600000){ c.data.__staleAt = c.at; c.data.__staleWhy = err.message; return c.data; }
+  throw err;
+}
+const ago = t => { const m = Math.round((Date.now()-t)/60000); return m < 60 ? m+' min ago' : Math.round(m/60)+' hr ago'; };
 async function cachedJSON(key, url, ttlMin){
   const c = store.get('c:'+key);
   if(c && Date.now()-c.at < ttlMin*60000) return c.data;
@@ -428,8 +447,8 @@ function fetchModelsMulti(lat, lon){
   const u = 'https://api.open-meteo.com/v1/forecast?latitude='+lat+'&longitude='+lon+'&models='+names.join(',')+
     '&hourly=temperature_2m,precipitation,wind_speed_10m,wind_gusts_10m,cloud_cover'+
     '&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_gusts_10m_max'+
-    '&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&timeformat=unixtime&forecast_days=8';
-  _multi = {key, p: getJSON(u)};
+    '&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&timeformat=unixtime&forecast_days=7';
+  _multi = {key, p: omJSON(u, 'multi:'+(+lat).toFixed(2)+','+(+lon).toFixed(2))};
   return _multi.p;
 }
 function pickModel(j, name){
@@ -439,7 +458,9 @@ function pickModel(j, name){
 async function fetchModelFast(m, lat, lon){
   try{
     const j = await fetchModelsMulti(lat, lon);
-    return parseOpenMeteo(pickModel(j, m.models[0]));
+    const r = parseOpenMeteo(pickModel(j, m.models[0]));
+    if(j.__staleAt){ r.staleAt = j.__staleAt; r.staleWhy = j.__staleWhy; }
+    return r;
   }catch(e){
     return fetchModel(m, lat, lon);   // fall back to one request per model
   }
@@ -451,7 +472,7 @@ async function fetchModel(m, lat, lon){
       '&hourly=temperature_2m,precipitation,wind_speed_10m,wind_gusts_10m,cloud_cover'+
       '&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_gusts_10m_max'+
       '&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&timeformat=unixtime&forecast_days=8';
-    try{ return parseOpenMeteo(await getJSON(u)); }catch(e){ lastErr = e; }
+    try{ const j = await omJSON(u, 'm:'+mod+':'+(+lat).toFixed(2)+','+(+lon).toFixed(2)); const r = parseOpenMeteo(j); if(j.__staleAt){ r.staleAt=j.__staleAt; r.staleWhy=j.__staleWhy; } return r; }catch(e){ lastErr = e; }
   }
   throw lastErr;
 }
@@ -462,7 +483,8 @@ async function fetchDetail(lat, lon){
     '&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,precipitation_probability,precipitation,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,shortwave_radiation,uv_index,surface_pressure'+
     '&daily=precipitation_probability_max,sunrise,sunset,uv_index_max'+
     '&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&timeformat=unixtime&forecast_days=8';
-  const j = await getJSON(u);
+  const j = await omJSON(u, 'detail:'+(+lat).toFixed(2)+','+(+lon).toFixed(2));
+  state.detailStaleAt = j.__staleAt || null;
   if(j.timezone) state.tz = j.timezone;
   if(isNum(j.elevation)) state.elevM = j.elevation;
   const h = j.hourly;
@@ -680,7 +702,7 @@ async function loadAll(){
   const jobs = state.sources.filter(s=>!s.off).map(async s=>{
     try{
       const r = await s.run(lat, lon);
-      Object.assign(s, r); s.status = 'ok';
+      Object.assign(s, r); s.status = r.staleAt ? 'stale' : 'ok';
       if(s.id==='nws'){
         state.alerts = r.alerts || []; state.stateCode = r.stateCode; state.office = r.office; state.afd = r.afd;
         if(r.city && state.place.auto){ state.place.name = r.city; state.place.auto = false; store.set('place', state.place); renderPlace(); }
@@ -694,7 +716,11 @@ async function loadAll(){
   state.loading = false;
   state.loadedAt = Date.now();
   const bad = state.sources.filter(s=>s.status==='fail');
-  $('sourceMsg').textContent = bad.length ? '⚠️ '+bad.map(s=>s.name).join(', ')+' failed: '+bad[0].error+(state.detail?'':' · Open-Meteo blend failed: '+(state.detailError||'')) :
+  const stale = state.sources.filter(s=>s.status==='stale');
+  if(stale.length || state.detailStaleAt){
+    const t = stale.length ? stale[0].staleAt : state.detailStaleAt;
+    $('sourceMsg').textContent = '🟡 Open-Meteo isn\'t answering right now ('+((stale[0]&&stale[0].staleWhy)||'no response')+'), so its models show the last good forecast from '+ago(t)+'. It will update automatically when it answers again.';
+  } else $('sourceMsg').textContent = bad.length ? '⚠️ '+bad.map(s=>s.name).join(', ')+' failed: '+bad[0].error+(state.detail?'':' · Open-Meteo blend failed: '+(state.detailError||'')) :
     (!state.detail && state.detailError ? '⚠️ Open-Meteo blend failed: '+state.detailError : '');
   render();
 }
@@ -843,7 +869,7 @@ function hourIndex(s){
   if(!s._hi){ s._hi = new Map(); for(const h of s.hourly) s._hi.set(Math.floor(h.t/3600000), h); }
   return s._hi;
 }
-function okSources(){ return state.sources.filter(s=>s.status==='ok'); }
+function okSources(){ return state.sources.filter(s=>s.status==='ok' || s.status==='stale'); }
 
 function buildHours(n=48){
   const start = Math.floor(Date.now()/3600000)*3600000;
@@ -1009,9 +1035,9 @@ function renderPlace(){
 function renderSources(){
   $('sources').innerHTML = state.sources.map(s=>{
     const cls = s.status;
-    const tip = s.status==='fail' ? s.error : s.status==='off' ? 'Add a key in ⚙︎ to turn on' : s.full;
+    const tip = s.status==='fail' ? s.error : s.status==='off' ? 'Add a key in ⚙︎ to turn on' : s.status==='stale' ? s.full+': last good forecast from '+ago(s.staleAt) : s.full;
     return '<span class="chip '+cls+'" data-id="'+s.id+'" title="'+esc(tip)+'"><span class="dot"></span>'+esc(s.name)+'</span>';
-  }).join('') + (state.ens ? '<span class="chip ok" data-ens="1" title="'+esc(state.ens.models.join(' + '))+'"><span class="dot"></span>Ensembles ('+state.ens.n+')</span>' : state.ensError ? '<span class="chip fail" data-ens="1" title="'+esc(state.ensError)+'"><span class="dot"></span>Ensembles</span>' : '') + (state.detail ? '<span class="chip ok" title="Open-Meteo best-match blend: used for rain %, humidity, dew point, solar, UV"><span class="dot"></span>Open-Meteo blend</span>' : '');
+  }).join('') + (state.ens ? '<span class="chip ok" data-ens="1" title="'+esc(state.ens.models.join(' + '))+'"><span class="dot"></span>Ensembles ('+state.ens.n+')</span>' : state.ensError ? '<span class="chip fail" data-ens="1" title="'+esc(state.ensError)+'"><span class="dot"></span>Ensembles</span>' : '') + (state.detail ? '<span class="chip '+(state.detailStaleAt?'stale':'ok')+'" title="Open-Meteo best-match blend: used for rain %, humidity, dew point, solar, UV"><span class="dot"></span>Open-Meteo blend</span>' : '');
 }
 document.addEventListener('click', e=>{
   const c = e.target.closest('#sources .chip'); if(!c) return;
@@ -1153,9 +1179,8 @@ async function fetchAloft(lat, lon){
   const vars = LEVELS.flatMap(l=>['wind_speed_'+l+'hPa','wind_direction_'+l+'hPa','cloud_cover_'+l+'hPa','geopotential_height_'+l+'hPa']);
   const base = 'https://api.open-meteo.com/v1/forecast?latitude='+lat+'&longitude='+lon+'&hourly='+vars.join(',')+
     ',wind_speed_10m,wind_direction_10m,cloud_cover_low,cloud_cover_mid,cloud_cover_high&wind_speed_unit=mph&timezone=auto&timeformat=unixtime&forecast_days=3';
-  let j;
-  try{ j = await getJSON(base); }catch(e){ j = await getJSON(base+'&models=gfs_seamless'); }
-  return j;
+  const k = (+lat).toFixed(2)+','+(+lon).toFixed(2);
+  try{ return await omJSON(base, 'aloft:'+k); }catch(e){ if(/^HTTP 400/.test(e.message)) return await omJSON(base+'&models=gfs_seamless', 'aloftg:'+k); throw e; }
 }
 async function loadSky(force){
   const {lat, lon} = state.place, key = lat+','+lon;
@@ -1163,7 +1188,8 @@ async function loadSky(force){
   if(!force && sky.data && sky.key===key && Date.now()-sky.at < 30*60000){ renderSky(); return; }
   sky.loading = true;
   $('skySummary').innerHTML = '<li class="muted">Loading…</li>';
-  try{ sky.data = await fetchAloft(lat, lon); sky.key = key; sky.at = Date.now(); renderSky(); }
+  try{ sky.data = await fetchAloft(lat, lon); sky.key = key; sky.at = sky.data.__staleAt ? 0 : Date.now(); renderSky();
+    if(sky.data.__staleAt) $('skySummary').insertAdjacentHTML('afterbegin','<li>🟡 Open-Meteo isn\'t answering, so this is the last good forecast from '+ago(sky.data.__staleAt)+'.</li>'); }
   catch(e){ $('skySummary').innerHTML = '<li>⚠️ Couldn\'t load winds aloft ('+esc(e.message)+')</li>'; $('skyChart').innerHTML=''; }
   finally{ sky.loading = false; }
 }
