@@ -221,6 +221,7 @@
         <input type="range" id="radarSlider" min="0" max="0" value="0">
         <span class="muted" id="radarTime" style="min-width:80px;text-align:right"></span>
       </div>
+      <label class="muted" style="display:inline-flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" id="radarSmooth" checked> Smooth radar when zoomed in</label>
       <div class="muted" id="radarWarn" style="margin-top:8px"></div>
     </div>
   </section>
@@ -1144,6 +1145,10 @@ async function initRadar(){
     radar.map.createPane('labels'); radar.map.getPane('labels').style.zIndex = 650; radar.map.getPane('labels').style.pointerEvents = 'none';
     L.tileLayer(ESRI+'World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {maxZoom:13, maxNativeZoom:16, pane:'labels'}).addTo(radar.map);
     radar.marker = L.circleMarker([state.place.lat, state.place.lon], {radius:6, color:'#111827', weight:2, fillColor:'#fff', fillOpacity:1, zIndexOffset:1000}).addTo(radar.map);
+    // radar tiles get their own pane so they can be smoothed as you zoom in
+    radar.map.createPane('radar'); radar.map.getPane('radar').style.zIndex = 400;
+    radar.map.on('zoomend', smoothRadar);
+    smoothRadar();
   }
   setTimeout(()=>radar.map.invalidateSize(), 50);
   // rebuild the loop at most every 4 minutes (IEM updates every 5)
@@ -1152,12 +1157,19 @@ async function initRadar(){
     radar.layers.forEach(l=>radar.map.removeLayer(l));
     const bust = Math.floor(Date.now()/300000);
     radar.frames = [50,45,40,35,30,25,20,15,10,5,0].map(m=>({ago:m, layer:'nexrad-n0q-900913'+(m?'-m'+String(m).padStart(2,'0')+'m':'')}));
-    radar.layers = radar.frames.map(f=>L.tileLayer(IEM+f.layer+'/{z}/{x}/{y}.png?'+bust, {opacity:0, maxZoom:13, zIndex:10}).addTo(radar.map));
+    radar.layers = radar.frames.map(f=>L.tileLayer(IEM+f.layer+'/{z}/{x}/{y}.png?'+bust, {opacity:0, maxZoom:13, maxNativeZoom:9, zIndex:10, pane:'radar'}).addTo(radar.map));
     $('radarSlider').max = radar.frames.length-1;
     showFrame(radar.frames.length-1);
     playRadar(true);
   }
   loadWarnings();
+}
+// The composite is ~1 km squares: blur it a little more each zoom level past 7 so it reads as rain, not blocks
+function smoothRadar(){
+  if(!radar.map) return;
+  const on = $('radarSmooth') ? $('radarSmooth').checked : true;
+  const z = radar.map.getZoom(), px = on ? Math.max(0, Math.min(8, Math.pow(2, z-7)*0.75)) : 0;
+  radar.map.getPane('radar').style.filter = px ? 'blur('+px.toFixed(1)+'px)' : '';
 }
 async function loadWarnings(){
   if(!state.stateCode || !radar.map) return;
@@ -1186,6 +1198,8 @@ function playRadar(on){
   else $('radarPlay').textContent = '▶';
 }
 $('radarPlay').onclick = ()=>playRadar(!radar.timer);
+$('radarSmooth').onchange = ()=>{ store.set('radarSmooth', $('radarSmooth').checked); smoothRadar(); };
+$('radarSmooth').checked = store.get('radarSmooth', true);
 $('radarSlider').oninput = e=>{ playRadar(false); showFrame(+e.target.value); };
 
 /* ---------- windy ---------- */
