@@ -1462,7 +1462,9 @@ const TRACKS = [
   {id:'rockingham', name:'Rockingham Dragway', city:'Rockingham, NC', lat:34.97418, lon:-79.61042, ev:'Nationals at The Rock', d:['2026-09-25','2026-09-27']},
   {id:'wwtr', name:'World Wide Technology Raceway', city:'Madison, IL', lat:38.6508, lon:-90.13537, ev:'Midwest Nationals', d:['2026-10-02','2026-10-04']},
   {id:'motorplex', name:'Texas Motorplex', city:'Ennis, TX', lat:32.3286, lon:-96.7174, ev:'FallNationals', d:['2026-10-14','2026-10-18']},
-  {id:'lasvegas', name:'The Strip at Las Vegas Motor Speedway', city:'Las Vegas, NV', lat:36.27134, lon:-115.01112, ev:'Las Vegas Nationals', d:['2026-10-29','2026-11-01']}
+  {id:'lasvegas', name:'The Strip at Las Vegas Motor Speedway', city:'Las Vegas, NV', lat:36.27134, lon:-115.01112, ev:'Las Vegas Nationals', d:['2026-10-29','2026-11-01']},
+  // other tracks (not on the 2026 national event tour)
+  {id:'maplegrove', name:'Maple Grove Raceway', city:'Mohnton, PA', lat:40.2127, lon:-75.9614, ev:'Not on 2026 tour', off:true}
 ];
 const fmtRange = d => { const a = new Date(d[0]+'T12:00:00Z'), b = new Date(d[1]+'T12:00:00Z'), o = {month:'short', day:'numeric', timeZone:'UTC'};
   return a.getUTCMonth()===b.getUTCMonth() ? a.toLocaleDateString('en-US',o)+'–'+b.getUTCDate() : a.toLocaleDateString('en-US',o)+' – '+b.toLocaleDateString('en-US',o); };
@@ -1474,14 +1476,14 @@ function renderTracks(){
   const headings = store.get('trackHeadings', {});
   // the next race on the calendar gets a badge
   const nextT = TRACKS.map(t=>({t, n:nextEventEnd(t)})).filter(x=>x.n).sort((a,b)=>a.n[0]<b.n[0]?-1:1)[0];
-  const ST = {FL:'florida',AZ:'arizona',CA:'california',NC:'north carolina',GA:'georgia',IL:'illinois',MD:'maryland',NH:'new hampshire',TN:'tennessee',OH:'ohio',WA:'washington',MN:'minnesota',IN:'indiana',MI:'michigan',TX:'texas',NV:'nevada'};
+  const ST = {PA:'pennsylvania',FL:'florida',AZ:'arizona',CA:'california',NC:'north carolina',GA:'georgia',IL:'illinois',MD:'maryland',NH:'new hampshire',TN:'tennessee',OH:'ohio',WA:'washington',MN:'minnesota',IN:'indiana',MI:'michigan',TX:'texas',NV:'nevada'};
   const list = TRACKS.filter(t=>!f || (t.name+' '+t.city+' '+(ST[t.city.slice(-2)]||'')+' '+t.ev).toLowerCase().includes(f));
   $('trackList').innerHTML = list.map(t=>{
-    const n = nextEventEnd(t), past = !n, here = state.place.trackId === t.id;
+    const n = nextEventEnd(t), past = !n && !t.off, here = state.place.trackId === t.id;
     const live = n && n[0] <= today && today <= n[1];
     const ev = trackEvents(t).map(d=>fmtRange(d)).join(' · ');
     const badge = here ? '<span class="badge here">Showing</span>' : live ? '<span class="badge">Race weekend</span>' : (nextT && nextT.t===t) ? '<span class="badge">Next race</span>' : '';
-    return '<div class="trk'+(past?' past':'')+(here?' cur':'')+'" data-id="'+t.id+'"><div><div class="tn">'+esc(t.name)+'</div><div class="ts">'+esc(t.city)+' · '+esc(t.ev)+' · '+ev+(isNum(headings[t.id])?' · runs '+compass(headings[t.id]):'')+'</div></div>'+badge+'</div>';
+    return '<div class="trk'+(past?' past':'')+(here?' cur':'')+'" data-id="'+t.id+'"><div><div class="tn">'+esc(t.name)+'</div><div class="ts">'+esc(t.city)+' · '+esc(t.ev)+(ev?' · '+ev:'')+(isNum(headings[t.id])?' · runs '+compass(headings[t.id]):'')+'</div></div>'+badge+'</div>';
   }).join('') || '<div class="muted" style="padding:8px 0">No tracks match.</div>';
 }
 function loadTrack(t){
