@@ -758,6 +758,14 @@ async function loadDavis(){
   try{
     const d = await getJSON(url + '/');
     if(d.error) throw new Error(d.error);
+    const raw = d.raw || {};
+    // fill readings some consoles name differently
+    if(!isNum(d.rainToday)) d.rainToday = [raw.rainfall_day_in, raw.rainfall_daily_in, raw.rain_day_in].find(isNum) ?? null;
+    if(!isNum(d.rainRate)) d.rainRate = [raw.rain_rate_last_in, raw.rain_rate_in].find(isNum) ?? null;
+    if(!isNum(d.pressureAbs)) d.pressureAbs = isNum(raw.bar_absolute) ? raw.bar_absolute : null;
+    d.wetBulb = isNum(raw.wet_bulb) ? raw.wet_bulb : null;
+    // barometer offset of 0 means the "sea level" value is really station (absolute) pressure
+    d.pressureIsAbs = isNum(raw.bar_offset) ? raw.bar_offset === 0 : (isNum(d.pressure) && isNum(d.pressureAbs) && Math.abs(d.pressure - d.pressureAbs) < 0.005);
     state.davis = d; state.davisError = null;
   }catch(e){ state.davis = null; state.davisError = e.message; }
 }
@@ -799,7 +807,8 @@ function renderDavis(hours){
   st.push(stat('Humidity', fmtPct(d.humidity), 'dew pt '+fmtT(d.dewPoint)));
   st.push(stat('Wind', (isNum(d.windSpeed)?Math.round(d.windSpeed):'–')+' '+compass(d.windDir), 'gust '+(isNum(d.windGust)?Math.round(d.windGust):'–')+' mph (10 min)'));
   st.push(stat('Solar', isNum(d.solar)?Math.round(d.solar)+' W/m²':'–', 'UV '+(isNum(d.uv)?d.uv.toFixed(1):'–')));
-  st.push(stat('Pressure', isNum(d.pressure)?d.pressure.toFixed(2)+'"':'–', isNum(d.pressureTrend) ? (d.pressureTrend>0.02?'rising':d.pressureTrend<-0.02?'falling':'steady') : 'sea level'));
+  const pShow = d.pressureIsAbs ? d.pressureAbs : d.pressure;
+  st.push(stat('Pressure', isNum(pShow)?pShow.toFixed(2)+'"':'–', (d.pressureIsAbs ? 'absolute (station)' : 'sea level') + (isNum(d.pressureTrend) ? ' · '+(d.pressureTrend>0.02?'rising':d.pressureTrend<-0.02?'falling':'steady') : '')));
   st.push(stat('Rain today', isNum(d.rainToday)?d.rainToday.toFixed(2)+'"':'–', isNum(d.rainRate)&&d.rainRate>0 ? d.rainRate.toFixed(2)+'"/hr now' : ''));
   if(isNum(state.place.heading) && !where) st.push(stat('Track wind', twText(trackWind(d.windSpeed, d.windDir, state.place.heading)), 'gust '+(isNum(d.windGust)?Math.round(d.windGust):'–')));
   if(isNum(d.heatIndex) || isNum(d.thsw)) st.push(stat('Heat index', fmtT(d.heatIndex), isNum(d.thsw)?'THSW '+fmtT(d.thsw):''));
@@ -935,7 +944,7 @@ function renderAir(hours){
   let air = null, src = '', wind = null, dew = null, tF = null, rh = null;
   const dvNear = dv && dv.station && isNum(dv.station.lat) ? haversineMi(dv.station.lat, dv.station.lon, state.place.lat, state.place.lon) <= 15 : !!dv;
   if(dv && dvNear && isNum(dv.temp) && isNum(dv.humidity)){
-    const pst = isNum(dv.pressureAbs) ? dv.pressureAbs : slToStation(dv.pressure, state.elevM);
+    const pst = isNum(dv.pressureAbs) ? dv.pressureAbs : dv.pressureIsAbs ? dv.pressure : slToStation(dv.pressure, state.elevM);
     air = airCalc(dv.temp, dv.humidity, pst);
     dew = dv.dewPoint; tF = dv.temp; rh = dv.humidity;
     src = '· live from '+((dv.station&&dv.station.name)||'Davis');
