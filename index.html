@@ -323,9 +323,9 @@
       <b style="font-size:18px">Settings</b>
       <button class="btn" id="settingsClose">Done</button>
     </div>
-    <label for="kDavis">Davis station relay URL</label>
+    <label for="kDavis">Team relay URL (Davis + forecasts)</label>
     <input type="text" id="kDavis" autocomplete="off" placeholder="https://davis-relay.yourname.workers.dev">
-    <div class="help">The Cloudflare Worker address that reads your WeatherLink station. Shows live Davis readings at the top.</div>
+    <div class="help">Your Cloudflare relay, e.g. https://davis-relay.sfabiano09.workers.dev. Shows live Davis readings, and fetches the forecasts through Cloudflare so they work on any Wi-Fi and the crew shares one copy.</div>
     <p class="muted">Optional API keys add more sources to the blend. They're saved only on this device, never in the page's code.</p>
     <label for="kTomorrow">Tomorrow.io API key</label>
     <input type="password" id="kTomorrow" autocomplete="off">
@@ -388,9 +388,31 @@ async function getJSON(url, opts={}){
 }
 // Open-Meteo: retry once, remember the last good answer, and fall back to it (up to 12 h old) if the service won't answer
 const sleep = ms => new Promise(r=>setTimeout(r, ms));
-async function omJSON(url, key){
+// Prefer the team relay (Cloudflare): shared cache, and immune to bad Wi-Fi. Falls back to direct.
+async function viaRelay(url){
+  const base = keys().davis;
+  if(!base || state.relayOm === false) return null;
+  const ctrl = new AbortController(), to = setTimeout(()=>ctrl.abort(), 30000);
+  try{
+    const r = await fetch(base + '/om/' + url.replace(/^https:\/\//,''), {signal: ctrl.signal});
+    if(r.headers.get('X-Relay-OM') !== '1'){ state.relayOm = false; return null; }   // relay not updated yet
+    state.relayOm = true;
+    if(!r.ok){ let m = 'relay HTTP '+r.status; try{ const j = await r.json(); if(j.reason||j.error) m += ' – '+(j.reason||j.error); }catch(e){} const e = new Error(m); e.status = r.status; throw e; }
+    const data = await r.json();
+    if(r.headers.get('X-Relay-Stale') === '1'){ data.__staleAt = +r.headers.get('X-Relay-At'); data.__staleWhy = 'Open-Meteo not answering (team relay copy)'; }
+    return data;
+  } finally { clearTimeout(to); }
+}
+async function omJSON(url, key, opts={}){
   const ck = 'om:'+key;
   let err;
+  try{
+    const d = await viaRelay(url);
+    if(d){
+      if(!opts.noSave && !d.__staleAt){ try{ localStorage.setItem('wb:'+ck, JSON.stringify({at:Date.now(), data:d})); }catch(e){} }
+      return d;
+    }
+  }catch(e){ err = e; if(e.status === 400) throw e; }
   for(let attempt=0; attempt<2; attempt++){
     try{
       const d = await getJSON(url, {timeout: 25000});
@@ -535,7 +557,7 @@ async function fetchEnsembleOne(e, lat, lon){
     const u = 'https://ensemble-api.open-meteo.com/v1/ensemble?latitude='+lat+'&longitude='+lon+'&models='+mod+
       '&hourly=temperature_2m,precipitation&temperature_unit=fahrenheit&precipitation_unit=inch&timezone=auto&timeformat=unixtime&forecast_days=8';
     try{
-      const j = await getJSON(u);
+      const j = await omJSON(u, 'ens:'+mod+':'+(+lat).toFixed(2)+','+(+lon).toFixed(2), {noSave:true});
       const h = j.hourly || {};
       const temps = Object.keys(h).filter(k=>/^temperature_2m(_member\d+)?(_|$)/.test(k)).map(k=>h[k]);
       const precs = Object.keys(h).filter(k=>/^precipitation(_member\d+)?(_|$)/.test(k)).map(k=>h[k]);
@@ -743,6 +765,7 @@ async function loadAll(){
   state.loadedAt = Date.now();
   const bad = state.sources.filter(s=>s.status==='fail');
   const stale = state.sources.filter(s=>s.status==='stale');
+  $('updated').title = state.relayOm ? 'Forecasts via team relay' : '';
   if(stale.length || state.detailStaleAt){
     const t = stale.length ? stale[0].staleAt : state.detailStaleAt;
     $('sourceMsg').textContent = '🟡 Open-Meteo isn\'t answering right now ('+((stale[0]&&stale[0].staleWhy)||'no response')+'), so its models show the last good forecast from '+ago(t)+'. It will update automatically when it answers again.';
@@ -1278,7 +1301,7 @@ function render(){
   renderRain(hours); renderDavis(hours); renderAir(hours); renderNow(hours, days); renderSummary(hours, days); renderAFD();
   renderCharts(hours); renderHourTable(hours); renderDays(days);
   const okN = okSources().length;
-  $('updated').textContent = 'Updated '+new Date(state.loadedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})+' · '+okN+' sources blended';
+  $('updated').textContent = 'Updated '+new Date(state.loadedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})+' · '+okN+' sources blended'+(state.relayOm ? ' · via team relay' : '');
   if(radar.map){ radar.map.setView([state.place.lat, state.place.lon], radar.map.getZoom()); radar.marker.setLatLng([state.place.lat, state.place.lon]); if(currentTab==='radar') loadWarnings(); }
   if(currentTab==='windy') loadWindy(); else windyLoadedFor = null;
   if(currentTab==='sky') loadSky(sky.key !== state.place.lat+','+state.place.lon || Date.now()-(sky.at||0) > 30*60000);
