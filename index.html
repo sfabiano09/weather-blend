@@ -116,6 +116,17 @@
       <div class="chips" id="savedPlaces"></div>
       <button class="btn" id="btnSave" style="margin-top:10px">★ Save current place</button>
     </div>
+    <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+      <div class="muted" style="margin-bottom:6px">Track direction (the way the cars run) for <b id="tdPlace"></b></div>
+      <div class="row">
+        <input type="text" inputmode="numeric" id="tdInput" placeholder="degrees, e.g. 85" style="width:150px">
+        <span id="tdCompass" class="muted"></span>
+        <button class="btn" id="tdMap">🛰 Set on map</button>
+        <button class="btn" id="tdSave">Save</button>
+        <button class="btn" id="tdClear">Clear</button>
+      </div>
+      <div class="muted" style="margin-top:6px">Turns wind into headwind / tailwind / crosswind for this track. Saved with the place.</div>
+    </div>
   </div>
 
   <div id="alerts"></div>
@@ -130,6 +141,12 @@
       </div>
     </div>
     <div class="stats" id="davisStats"></div>
+  </div>
+
+  <div class="card" id="airCard">
+    <h2>Race air <span class="muted" id="airSrc" style="text-transform:none;letter-spacing:0"></span></h2>
+    <div class="stats" id="airStats"></div>
+    <div class="muted" id="airNote" style="margin-top:8px"></div>
   </div>
 
   <div class="card">
@@ -147,6 +164,11 @@
   <div class="card">
     <h2>The blend says <span id="overallConf"></span></h2>
     <ul class="summary" id="summary"><li class="muted">Pulling forecasts…</li></ul>
+  </div>
+
+  <div class="card hidden" id="afdCard">
+    <h2>NWS forecaster's notes <span class="muted" id="afdMeta" style="text-transform:none;letter-spacing:0"></span></h2>
+    <div id="afdBody"></div>
   </div>
 
   <div class="card">
@@ -173,9 +195,13 @@
       <div class="chartbox small"><canvas id="rainChart"></canvas></div>
     </div>
     <div class="card">
+      <h2>Density altitude &amp; grains (forecast)</h2>
+      <div class="chartbox small"><canvas id="airChart"></canvas></div>
+    </div>
+    <div class="card">
       <h2>Next 24 hours</h2>
       <div class="tablewrap"><table id="hourTable"></table></div>
-      <div class="muted" style="margin-top:8px">Temp, rain %, wind and gust are the blend (median of sources); small numbers are the low–high spread between sources. Feels, humidity, dew point, clouds, solar and UV come from Open-Meteo.</div>
+      <div class="muted" style="margin-top:8px">Temp, rain %, wind and gust are the blend (median of sources); small numbers are the low–high spread between sources. Feels, humidity, dew point, clouds, solar, UV and air data (DA, grains) come from Open-Meteo. Track wind: head/tail along the strip, then crosswind from the right (R) or left (L).</div>
     </div>
   </section>
 
@@ -188,13 +214,14 @@
 
   <section id="tab-radar" class="hidden">
     <div class="card">
-      <h2>Radar loop (RainViewer)</h2>
+      <h2>Radar loop — NWS NEXRAD, last 50 min</h2>
       <div id="radarMap"></div>
       <div class="radarbar">
         <button class="btn" id="radarPlay">⏸</button>
         <input type="range" id="radarSlider" min="0" max="0" value="0">
-        <span class="muted" id="radarTime"></span>
+        <span class="muted" id="radarTime" style="min-width:80px;text-align:right"></span>
       </div>
+      <div class="muted" id="radarWarn" style="margin-top:8px"></div>
     </div>
   </section>
 
@@ -227,8 +254,24 @@
   </div>
 
   <p class="muted" style="text-align:center;margin-top:16px">
-    Data: National Weather Service · Open-Meteo (GFS, HRRR, ECMWF, ECMWF AIFS, ICON, GEM) · RainViewer · Windy · plus any keys you add in ⚙︎
+    Data: National Weather Service · Open-Meteo (GFS, HRRR, ECMWF, ECMWF AIFS, ICON, GEM, GFS &amp; ECMWF ensembles) · NEXRAD radar via Iowa Environmental Mesonet · Windy · plus any keys you add in ⚙︎
   </p>
+</div>
+
+<!-- Track direction map -->
+<div class="modal hidden" id="tdModal">
+  <div class="sheet">
+    <div class="row" style="justify-content:space-between">
+      <b style="font-size:18px">Set track direction</b>
+      <button class="btn" id="tdModalClose">Cancel</button>
+    </div>
+    <p class="muted" id="tdStep">Zoom to the strip, then tap the <b>starting line</b>.</p>
+    <div id="tdMapEl" style="height:380px;border-radius:12px"></div>
+    <div class="row" style="margin-top:10px;justify-content:space-between">
+      <span id="tdResult" style="font-weight:600"></span>
+      <span class="row"><button class="btn" id="tdReset">Start over</button><button class="btn primary" id="tdUse" disabled>Use this</button></span>
+    </div>
+  </div>
 </div>
 
 <!-- Settings sheet -->
@@ -317,8 +360,13 @@ const state = {
 };
 const keys = () => store.get('keys', {tomorrow:'', accu:'', wu:''});
 
+const _dk = {tz:null, fmt:null, cache:new Map()};
 function dkey(ms){
-  return new Intl.DateTimeFormat('en-CA',{timeZone:state.tz,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(ms));
+  if(_dk.tz !== state.tz){ _dk.tz = state.tz; _dk.fmt = new Intl.DateTimeFormat('en-CA',{timeZone:state.tz,year:'numeric',month:'2-digit',day:'2-digit'}); _dk.cache.clear(); }
+  const h = Math.floor(ms/3600000);
+  let v = _dk.cache.get(h);
+  if(!v){ v = _dk.fmt.format(new Date(ms)); _dk.cache.set(h, v); }
+  return v;
 }
 function addDays(key, n){ const d = new Date(key+'T12:00:00Z'); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10); }
 function dayLabel(key){
@@ -370,20 +418,126 @@ async function fetchModel(m, lat, lon){
 async function fetchDetail(lat, lon){
   const u = 'https://api.open-meteo.com/v1/forecast?latitude='+lat+'&longitude='+lon+
     '&current=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,wind_speed_10m,wind_gusts_10m,wind_direction_10m,cloud_cover,precipitation,surface_pressure,weather_code'+
-    '&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,precipitation_probability,precipitation,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,shortwave_radiation,uv_index'+
+    '&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,precipitation_probability,precipitation,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,shortwave_radiation,uv_index,surface_pressure'+
     '&daily=precipitation_probability_max,sunrise,sunset,uv_index_max'+
     '&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&timeformat=unixtime&forecast_days=8';
   const j = await getJSON(u);
   if(j.timezone) state.tz = j.timezone;
+  if(isNum(j.elevation)) state.elevM = j.elevation;
   const h = j.hourly;
   const hourly = h.time.map((t,i)=>({
     t:t*1000, temp:h.temperature_2m[i], feels:h.apparent_temperature[i], rh:h.relative_humidity_2m[i], dew:h.dew_point_2m[i],
     pop:h.precipitation_probability[i], precip:h.precipitation[i], cloud:h.cloud_cover[i], wind:h.wind_speed_10m[i],
-    dir:h.wind_direction_10m[i], gust:h.wind_gusts_10m[i], solar:h.shortwave_radiation[i], uv:h.uv_index[i]
+    dir:h.wind_direction_10m[i], gust:h.wind_gusts_10m[i], solar:h.shortwave_radiation[i], uv:h.uv_index[i], sp:h.surface_pressure[i]
   }));
   const d = j.daily;
   const daily = d.time.map((t,i)=>({ms:t*1000+12*3600000, pop:d.precipitation_probability_max[i], sunrise:d.sunrise[i]*1000, sunset:d.sunset[i]*1000, uv:d.uv_index_max[i]}));
   return {current: j.current, hourly, daily};
+}
+
+/* ---------- ensembles (many runs of the same model) ---------- */
+const ENSEMBLES = [
+  {id:'gefs', name:'GFS ensemble',   models:['gfs025','gfs_seamless','ncep_gefs025']},
+  {id:'eps',  name:'ECMWF ensemble', models:['ecmwf_ifs025','ecmwf_ifs']}
+];
+async function fetchEnsembleOne(e, lat, lon){
+  let lastErr;
+  for(const mod of e.models){
+    const u = 'https://ensemble-api.open-meteo.com/v1/ensemble?latitude='+lat+'&longitude='+lon+'&models='+mod+
+      '&hourly=temperature_2m,precipitation&temperature_unit=fahrenheit&precipitation_unit=inch&timezone=auto&timeformat=unixtime&forecast_days=8';
+    try{
+      const j = await getJSON(u);
+      const h = j.hourly || {};
+      const temps = Object.keys(h).filter(k=>/^temperature_2m(_member\d+)?(_|$)/.test(k)).map(k=>h[k]);
+      const precs = Object.keys(h).filter(k=>/^precipitation(_member\d+)?(_|$)/.test(k)).map(k=>h[k]);
+      if(!temps.length) throw new Error('no ensemble data');
+      return {name:e.name, time:h.time.map(t=>t*1000), temps, precs};
+    }catch(err){ lastErr = err; }
+  }
+  throw lastErr;
+}
+async function fetchEnsembles(lat, lon){
+  const res = await Promise.allSettled(ENSEMBLES.map(e=>fetchEnsembleOne(e, lat, lon)));
+  const ok = res.filter(r=>r.status==='fulfilled').map(r=>r.value);
+  if(!ok.length) throw new Error(res[0].reason ? res[0].reason.message : 'ensembles unavailable');
+  // index every member by hour
+  const hours = new Map();   // hourKey -> {temps:[], wet:[]} across all members of all models
+  const members = [];        // [{byHour: Map(hourKey -> {t, p})}]
+  for(const e of ok){
+    e.temps.forEach((series, mi)=>{
+      const m = new Map();
+      e.time.forEach((t,i)=>{ m.set(Math.floor(t/3600000), {t:series[i], p: e.precs[mi] ? e.precs[mi][i] : null}); });
+      members.push(m);
+    });
+  }
+  return {models: ok.map(e=>e.name), n: members.length, members};
+}
+const pct = (arr, p)=>{ const v = arr.filter(isNum).sort((a,b)=>a-b); if(!v.length) return null; const i=(v.length-1)*p, lo=Math.floor(i), hi=Math.ceil(i); return v[lo]+(v[hi]-v[lo])*(i-lo); };
+// rain in a 3-hr window centred on the hour (ECMWF members are 3-hourly)
+function ensHour(ens, k){
+  if(!ens) return null;
+  const temps = [], wet = [];
+  for(const m of ens.members){
+    const r = m.get(k); if(!r) continue;
+    if(isNum(r.t)) temps.push(r.t);
+    let sum = 0, any = false;
+    for(const kk of [k-1,k,k+1]){ const x = m.get(kk); if(x && isNum(x.p)){ sum += x.p; any = true; } }
+    if(any) wet.push(sum >= 0.01);
+  }
+  if(!temps.length) return null;
+  return {p10:pct(temps,.1), p50:pct(temps,.5), p90:pct(temps,.9), rain: wet.length ? 100*wet.filter(Boolean).length/wet.length : null, n:temps.length, nWet:wet.filter(Boolean).length, nRain:wet.length};
+}
+// share of runs with measurable rain anywhere in a span of hours
+function ensSpan(ens, k0, k1){
+  if(!ens) return null;
+  let n=0, wet=0;
+  for(const m of ens.members){
+    let sum=0, any=false;
+    for(let k=k0;k<=k1;k++){ const x=m.get(k); if(x && isNum(x.p)){ sum+=x.p; any=true; } }
+    if(any){ n++; if(sum>=0.01) wet++; }
+  }
+  return n ? {n, wet, pct:100*wet/n} : null;
+}
+function ensDay(ens, key){
+  if(!ens) return null;
+  const his=[], los=[], wet=[];
+  for(const m of ens.members){
+    let hi=-Infinity, lo=Infinity, sum=0, cnt=0;
+    for(const [k, r] of m){
+      if(dkey(k*3600000)!==key) continue;
+      if(isNum(r.t)){ hi=Math.max(hi,r.t); lo=Math.min(lo,r.t); cnt++; }
+      if(isNum(r.p)) sum += r.p;
+    }
+    if(cnt >= 6){ his.push(hi); los.push(lo); wet.push(sum >= 0.02); }
+  }
+  if(!his.length) return null;
+  return {hi10:pct(his,.1), hi50:pct(his,.5), hi90:pct(his,.9), lo10:pct(los,.1), lo90:pct(los,.9),
+    rain: 100*wet.filter(Boolean).length/wet.length, nWet: wet.filter(Boolean).length, n: wet.length};
+}
+
+/* ---------- NWS Area Forecast Discussion ---------- */
+async function fetchAFD(office){
+  const hdr = {headers:{Accept:'application/ld+json'}};
+  const list = await getJSON('https://api.weather.gov/products/types/AFD/locations/'+office, hdr);
+  const first = (list['@graph']||[])[0];
+  if(!first) throw new Error('no discussion');
+  const prod = await getJSON(first['@id'] || ('https://api.weather.gov/products/'+first.id), hdr);
+  return {office, issued: Date.parse(prod.issuanceTime), sections: parseAFD(prod.productText||'')};
+}
+function parseAFD(text){
+  const out = [];
+  const parts = text.replace(/\r/g,'').split(/\n(?=\.[A-Z][A-Z /&-]+)/);
+  for(const part of parts.slice(1)){
+    const m = part.match(/^\.([A-Z][A-Z &-]*?)\s*(?:\/([^\/\n]*)\/?)?\s*\.{2,}/);
+    if(!m) continue;
+    let title = m[1].trim(), body = part.slice(part.indexOf('\n')+1);
+    const sub = m[2] ? m[2].trim() : '';
+    body = body.split(/\n&&|\n\$\$/)[0]
+      .split(/\n\s*\n/).map(p=>p.replace(/\s*\n\s*/g,' ').trim()).filter(Boolean).join('\n\n');
+    if(/^(WATCHES|[A-Z]{3} WATCHES)/.test(title) || !body) continue;
+    out.push({title: title.charAt(0)+title.slice(1).toLowerCase(), sub, body});
+  }
+  return out;
 }
 
 function mphFromText(s){ const n = String(s||'').match(/\d+/g); return n ? Math.max(...n.map(Number)) : null; }
@@ -392,10 +546,11 @@ async function fetchNWS(lat, lon){
   const p = await getJSON('https://api.weather.gov/points/'+lat.toFixed(4)+','+lon.toFixed(4), hdr);
   const pr = p.properties;
   const rl = pr.relativeLocation && pr.relativeLocation.properties;
-  const [f, fh, al] = await Promise.all([
+  const [f, fh, al, afd] = await Promise.all([
     getJSON(pr.forecast, hdr),
     getJSON(pr.forecastHourly, hdr),
-    getJSON('https://api.weather.gov/alerts/active?point='+lat.toFixed(4)+','+lon.toFixed(4), hdr).catch(()=>({features:[]}))
+    getJSON('https://api.weather.gov/alerts/active?point='+lat.toFixed(4)+','+lon.toFixed(4), hdr).catch(()=>({features:[]})),
+    fetchAFD(pr.cwa || pr.gridId).catch(()=>null)
   ]);
   const hourly = fh.properties.periods.map(x=>({
     t: Date.parse(x.startTime), temp: x.temperature, pop: x.probabilityOfPrecipitation ? x.probabilityOfPrecipitation.value : null,
@@ -417,7 +572,7 @@ async function fetchNWS(lat, lon){
   const daily = Object.values(byDate).sort((a,b)=>a.date<b.date?-1:1);
   const alerts = (al.features||[]).map(a=>a.properties);
   const city = rl ? rl.city+', '+rl.state : null;
-  return {hourly, daily, alerts, city, office: pr.gridId};
+  return {hourly, daily, alerts, city, office: pr.gridId, stateCode: rl ? rl.state : null, afd};
 }
 
 async function fetchTomorrow(lat, lon, key){
@@ -486,14 +641,15 @@ async function loadAll(){
       const r = await s.run(lat, lon);
       Object.assign(s, r); s.status = 'ok';
       if(s.id==='nws'){
-        state.alerts = r.alerts || [];
+        state.alerts = r.alerts || []; state.stateCode = r.stateCode; state.office = r.office; state.afd = r.afd;
         if(r.city && state.place.auto){ state.place.name = r.city; state.place.auto = false; store.set('place', state.place); renderPlace(); }
       }
     }catch(e){ s.status = 'fail'; s.error = e.message || String(e); }
     renderSources();
   });
   const det = fetchDetail(lat, lon).then(d=>{ state.detail = d; }).catch(e=>{ state.detail = null; state.detailError = e.message; });
-  await Promise.all([...jobs, det, loadDavis()]);
+  const ens = fetchEnsembles(lat, lon).then(e=>{ state.ens = e; state.ensError = null; }).catch(e=>{ state.ens = null; state.ensError = e.message; });
+  await Promise.all([...jobs, det, ens, loadDavis()]);
   state.loading = false;
   state.loadedAt = Date.now();
   render();
@@ -549,8 +705,93 @@ function renderDavis(hours){
   st.push(stat('Solar', isNum(d.solar)?Math.round(d.solar)+' W/m²':'–', 'UV '+(isNum(d.uv)?d.uv.toFixed(1):'–')));
   st.push(stat('Pressure', isNum(d.pressure)?d.pressure.toFixed(2)+'"':'–', isNum(d.pressureTrend) ? (d.pressureTrend>0.02?'rising':d.pressureTrend<-0.02?'falling':'steady') : 'sea level'));
   st.push(stat('Rain today', isNum(d.rainToday)?d.rainToday.toFixed(2)+'"':'–', isNum(d.rainRate)&&d.rainRate>0 ? d.rainRate.toFixed(2)+'"/hr now' : ''));
+  if(isNum(state.place.heading) && !where) st.push(stat('Track wind', twText(trackWind(d.windSpeed, d.windDir, state.place.heading)), 'gust '+(isNum(d.windGust)?Math.round(d.windGust):'–')));
   if(isNum(d.heatIndex) || isNum(d.thsw)) st.push(stat('Heat index', fmtT(d.heatIndex), isNum(d.thsw)?'THSW '+fmtT(d.thsw):''));
   $('davisStats').innerHTML = st.join('');
+}
+
+function renderAFD(){
+  const a = state.afd, card = $('afdCard');
+  if(!a || !a.sections.length){ card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  const mins = Math.round((Date.now()-a.issued)/60000);
+  $('afdMeta').textContent = '· '+a.office+' office, issued '+(mins<90 ? mins+' min ago' : Math.round(mins/60)+' hr ago');
+  const pick = a.sections.find(x=>/^Key messages/i.test(x.title)) || a.sections.find(x=>/^Synopsis/i.test(x.title)) || a.sections[0];
+  const para = t => esc(t).split('\n\n').map(p=>'<p style="margin:6px 0">'+p+'</p>').join('');
+  $('afdBody').innerHTML = '<div style="font-size:14px"><b>'+esc(pick.title)+'</b>'+para(pick.body.length>900 ? pick.body.slice(0,900).replace(/\s\S*$/,'')+'…' : pick.body)+'</div>'+
+    a.sections.filter(x=>x!==pick).map(x=>'<details style="margin-top:6px"><summary style="cursor:pointer;font-weight:600">'+esc(x.title)+(x.sub?' <span class="muted">('+esc(x.sub)+')</span>':'')+'</summary><div style="font-size:14px">'+para(x.body)+'</div></details>').join('');
+}
+
+/* ---------- race air & track wind ---------- */
+// tempF, RH %, station (absolute) pressure in inHg
+function airCalc(tF, rh, pInHg){
+  if(!isNum(tF) || !isNum(rh) || !isNum(pInHg)) return null;
+  const tC = (tF-32)*5/9, tK = tC+273.15, P = pInHg*33.8639;          // hPa
+  const es = 6.1078*Math.pow(10, 7.5*tC/(237.3+tC));                  // sat. vapor pressure hPa
+  const e = es*rh/100, pd = P-e;
+  const rho = pd*100/(287.058*tK) + e*100/(461.495*tK);               // kg/m3
+  const ratio = rho/1.225;
+  return {
+    da: 145442.16*(1-Math.pow(ratio, 0.234969)),                      // density altitude, ft
+    rad: ratio*100,                                                    // relative air density %
+    grains: 7000*0.62198*e/(P-e),                                      // grains of water per lb dry air
+    vp: e/33.8639,                                                     // vapor pressure inHg
+    pst: pInHg
+  };
+}
+const slToStation = (pSl, elevM) => isNum(pSl)&&isNum(elevM) ? pSl*Math.pow(1-2.25577e-5*elevM, 5.25588) : null;
+const hpaToIn = v => isNum(v) ? v/33.8639 : null;
+function trackWind(speed, fromDeg, heading){
+  if(!isNum(speed) || !isNum(fromDeg) || !isNum(heading)) return null;
+  const a = (fromDeg-heading)*Math.PI/180;
+  return {head: speed*Math.cos(a), cross: speed*Math.sin(a)};   // head>0 headwind, cross>0 from the right
+}
+function twText(tw, short){
+  if(!tw) return '–';
+  const h = Math.round(tw.head), c = Math.round(tw.cross);
+  const along = h===0 ? (short?'0':'no head/tail') : Math.abs(h)+(h>0?' head':' tail');
+  const side = c===0 ? '' : ' · '+Math.abs(c)+(short?(c>0?' R':' L'):(c>0?' from right':' from left'));
+  return along+side;
+}
+function bearing(lat1, lon1, lat2, lon2){
+  const t = Math.PI/180, y = Math.sin((lon2-lon1)*t)*Math.cos(lat2*t);
+  const x = Math.cos(lat1*t)*Math.sin(lat2*t) - Math.sin(lat1*t)*Math.cos(lat2*t)*Math.cos((lon2-lon1)*t);
+  return (Math.atan2(y,x)/t + 360) % 360;
+}
+function hourAir(h){
+  const d = h.d || {};
+  return airCalc(isNum(d.temp)?d.temp:h.temp, d.rh, hpaToIn(d.sp));
+}
+
+function renderAir(hours){
+  const H = state.place.heading;
+  const dv = state.davis;
+  let air = null, src = '', wind = null;
+  const dvNear = dv && dv.station && isNum(dv.station.lat) ? haversineMi(dv.station.lat, dv.station.lon, state.place.lat, state.place.lon) <= 15 : !!dv;
+  if(dv && dvNear && isNum(dv.temp) && isNum(dv.humidity)){
+    const pst = isNum(dv.pressureAbs) ? dv.pressureAbs : slToStation(dv.pressure, state.elevM);
+    air = airCalc(dv.temp, dv.humidity, pst);
+    src = '· live from '+((dv.station&&dv.station.name)||'Davis');
+    wind = trackWind(dv.windSpeed, dv.windDir, H);
+  }
+  if(!air && hours[0]){
+    air = hourAir(hours[0]);
+    src = '· from forecast (Davis not connected here)';
+    const d = hours[0].d || {};
+    wind = trackWind(isNum(d.wind)?d.wind:hours[0].wind, d.dir, H);
+  }
+  if(!air){ $('airStats').innerHTML = '<div class="muted">Not enough data yet.</div>'; $('airSrc').textContent=''; return; }
+  $('airSrc').textContent = src;
+  const da = hours.slice(0,24).map(hourAir).filter(Boolean).map(a=>a.da);
+  const st = [];
+  st.push(stat('Density alt.', Math.round(air.da).toLocaleString()+' ft', da.length ? 'next 24h '+Math.round(Math.min(...da)).toLocaleString()+' to '+Math.round(Math.max(...da)).toLocaleString() : ''));
+  st.push(stat('Air density', air.rad.toFixed(1)+'%', 'vs. standard day'));
+  st.push(stat('Grains', air.grains.toFixed(0), 'water per lb of air'));
+  st.push(stat('Vapor press.', air.vp.toFixed(3)+'"', 'inHg'));
+  st.push(stat('Station press.', air.pst.toFixed(2)+'"', 'absolute, inHg'));
+  st.push(stat('Track wind', isNum(H) ? twText(wind) : 'Set direction', isNum(H) ? 'track runs '+Math.round(H)+'° '+compass(H) : 'tap 🔍 → Track direction'));
+  $('airStats').innerHTML = st.join('');
+  $('airNote').textContent = (state.elevM ? 'Elevation '+Math.round(state.elevM*3.281).toLocaleString()+' ft. ' : '') + 'Standard day = 59°F, 29.92", dry air = 0 ft / 100%.';
 }
 
 /* ---------- blending ---------- */
@@ -570,11 +811,12 @@ function buildHours(n=48){
     for(const s of okSources()){ const r = hourIndex(s).get(k); if(r) by[s.id] = r; }
     const d = det.get(k) || {};
     const temps = okSources().filter(s=>s.temp).map(s=>by[s.id]&&by[s.id].temp);
-    const pops = [...okSources().filter(s=>s.pop).map(s=>by[s.id]&&by[s.id].pop), d.pop];
+    const e = ensHour(state.ens, k);
+    const pops = [...okSources().filter(s=>s.pop).map(s=>by[s.id]&&by[s.id].pop), d.pop, e && e.rain];
     const precs = okSources().filter(s=>s.model).map(s=>by[s.id]&&by[s.id].precip);
     const gusts = [...okSources().map(s=>by[s.id]&&by[s.id].gust)];
     const winds = [...okSources().map(s=>by[s.id]&&by[s.id].wind)];
-    out.push({t, by, d,
+    out.push({t, by, d, ens: e,
       temp: median(temps), tMin: minOf(temps), tMax: maxOf(temps), nTemp: temps.filter(isNum).length,
       pop: median(pops), popMin: minOf(pops), popMax: maxOf(pops),
       precip: median(precs), wetModels: precs.filter(v=>isNum(v)&&v>=0.01).length, nModels: precs.filter(isNum).length,
@@ -598,7 +840,8 @@ function buildDays(n=7){
     const dd = detDaily.get(key) || {};
     const ts = okSources().filter(s=>s.temp);
     const his = ts.map(s=>by[s.id]&&by[s.id].hi), los = ts.map(s=>by[s.id]&&by[s.id].lo);
-    const pops = [...okSources().filter(s=>s.pop).map(s=>by[s.id]&&by[s.id].pop), dd.pop];
+    const ed = ensDay(state.ens, key);
+    const pops = [...okSources().filter(s=>s.pop).map(s=>by[s.id]&&by[s.id].pop), dd.pop, ed && ed.rain];
     const precs = okSources().filter(s=>s.model).map(s=>by[s.id]&&by[s.id].precip);
     const gusts = okSources().map(s=>by[s.id]&&by[s.id].gust);
     const day = {key, by, dd,
@@ -607,7 +850,8 @@ function buildDays(n=7){
       pop: median(pops), popMin: minOf(pops), popMax: maxOf(pops),
       precip: median(precs), wet: precs.filter(v=>isNum(v)&&v>=0.02).length, nModels: precs.filter(isNum).length,
       gust: median(gusts),
-      text: (by.nws && by.nws.text) || (by.accu && by.accu.text) || ''
+      text: (by.nws && by.nws.text) || (by.accu && by.accu.text) || '',
+      ens: ed
     };
     day.conf = confidence(day);
     days.push(day);
@@ -617,10 +861,17 @@ function buildDays(n=7){
 
 function confidence(d){
   let pts = 0;
-  const spread = (isNum(d.hiMax)&&isNum(d.hiMin)) ? d.hiMax-d.hiMin : 0;
-  if(spread > 10) pts += 2; else if(spread > 5) pts += 1;
-  const frac = d.nModels ? d.wet/d.nModels : null;
-  if(frac!==null && frac>0.25 && frac<0.75) pts += 1;
+  if(d.ens){
+    // ensemble spread is the best measure: width of the middle 80% of high temps
+    const w = d.ens.hi90 - d.ens.hi10;
+    if(w > 12) pts += 2; else if(w > 6) pts += 1;
+    if(d.ens.rain > 25 && d.ens.rain < 75) pts += 1;
+  } else {
+    const spread = (isNum(d.hiMax)&&isNum(d.hiMin)) ? d.hiMax-d.hiMin : 0;
+    if(spread > 10) pts += 2; else if(spread > 5) pts += 1;
+    const frac = d.nModels ? d.wet/d.nModels : null;
+    if(frac!==null && frac>0.25 && frac<0.75) pts += 1;
+  }
   if(isNum(d.popMax)&&isNum(d.popMin) && d.popMax-d.popMin >= 40) pts += 1;
   return pts >= 3 ? 'Low' : pts >= 1 ? 'Medium' : 'High';
 }
@@ -660,6 +911,10 @@ function buildSummary(hours, days){
     out.push('☀️ Dry: rain chance stays under 25% the next 24 hrs.');
   }
 
+  if(state.ens && next24.length){
+    const k0 = Math.floor(next24[0].t/3600000), sp = ensSpan(state.ens, k0, k0+23);
+    if(sp) out.push('🎲 Ensembles: <b>'+sp.wet+' of '+sp.n+'</b> runs show measurable rain in the next 24 hrs ('+fmtPct(sp.pct)+').');
+  }
   const gmax = maxOf(next24.map(h=>h.gust));
   if(isNum(gmax) && gmax >= 25){
     const h = next24.find(x=>x.gust===gmax);
@@ -671,13 +926,18 @@ function buildSummary(hours, days){
   if(isNum(avgSp)) out.push('Sources agree on temps within about <b>'+Math.round(avgSp)+'°</b> over the next day' + (avgSp<=4 ? ' (tight).' : avgSp<=8 ? '.' : '. That\'s a wide split, so trust the specifics less.'));
 
   const later = days.slice(1);
-  const rainy = later.filter(d=>(isNum(d.pop)&&d.pop>=50) || (d.nModels>=3 && d.wet/d.nModels>=0.6));
+  const rainy = later.filter(d=>(isNum(d.pop)&&d.pop>=50) || (d.ens ? d.ens.rain>=60 : (d.nModels>=3 && d.wet/d.nModels>=0.6)));
   if(rainy.length) out.push('Rain looks likely: <b>'+rainy.map(d=>dayLabel(d.key).long).join(', ')+'</b>.');
   const split = later.filter(d=>d.conf==='Low');
   split.forEach(d=>{
     const bits = [];
-    if(isNum(d.hiMax)&&isNum(d.hiMin)&&d.hiMax-d.hiMin>8) bits.push('highs range '+fmtT(d.hiMin)+'–'+fmtT(d.hiMax));
-    if(d.nModels) bits.push(d.wet+' of '+d.nModels+' models show rain');
+    if(d.ens){
+      bits.push('likely high '+fmtT(d.ens.hi10)+'–'+fmtT(d.ens.hi90));
+      bits.push(d.ens.nWet+' of '+d.ens.n+' runs show rain');
+    } else {
+      if(isNum(d.hiMax)&&isNum(d.hiMin)&&d.hiMax-d.hiMin>8) bits.push('highs range '+fmtT(d.hiMin)+'–'+fmtT(d.hiMax));
+      if(d.nModels) bits.push(d.wet+' of '+d.nModels+' models show rain');
+    }
     out.push('⚠️ Low confidence for '+dayLabel(d.key).long+': '+bits.join(', ')+'.');
   });
   for(let i=1;i<later.length;i++){
@@ -707,11 +967,12 @@ function renderSources(){
     const cls = s.status;
     const tip = s.status==='fail' ? s.error : s.status==='off' ? 'Add a key in ⚙︎ to turn on' : s.full;
     return '<span class="chip '+cls+'" data-id="'+s.id+'" title="'+esc(tip)+'"><span class="dot"></span>'+esc(s.name)+'</span>';
-  }).join('') + (state.detail ? '<span class="chip ok" title="Open-Meteo best-match blend: used for rain %, humidity, dew point, solar, UV"><span class="dot"></span>Open-Meteo blend</span>' : '');
+  }).join('') + (state.ens ? '<span class="chip ok" data-ens="1" title="'+esc(state.ens.models.join(' + '))+'"><span class="dot"></span>Ensembles ('+state.ens.n+')</span>' : state.ensError ? '<span class="chip fail" data-ens="1" title="'+esc(state.ensError)+'"><span class="dot"></span>Ensembles</span>' : '') + (state.detail ? '<span class="chip ok" title="Open-Meteo best-match blend: used for rain %, humidity, dew point, solar, UV"><span class="dot"></span>Open-Meteo blend</span>' : '');
 }
 document.addEventListener('click', e=>{
   const c = e.target.closest('#sources .chip'); if(!c) return;
   const s = state.sources.find(x=>x.id===c.dataset.id);
+  if(c.dataset.ens){ $('sourceMsg').textContent = state.ens ? 'Ensembles: '+state.ens.models.join(' + ')+', '+state.ens.n+' runs total. Used for rain odds, the shaded temperature range and confidence.' : 'Ensembles failed ('+state.ensError+')'; return; }
   if(!s){ $('sourceMsg').textContent = 'Open-Meteo blend: used for rain chance, humidity, dew point, clouds, solar and UV.'; return; }
   $('sourceMsg').textContent = s.full + ': ' + (s.status==='ok' ? 'loaded' : s.status==='off' ? 'off. Add a key in ⚙︎ to include it.' : s.status==='wait' ? 'loading…' : 'failed ('+s.error+')');
 });
@@ -765,30 +1026,43 @@ function renderCharts(hours){
   const ds = tSources.map(s=>({label:s.name, data:hours.map(h=>h.by[s.id] ? h.by[s.id].temp : null), borderColor:s.color, backgroundColor:s.color,
     borderWidth:1.5, pointRadius:0, tension:.3, spanGaps:true}));
   ds.push({label:'Blend', data:hours.map(h=>h.temp), borderColor:'#111827', borderWidth:3.5, pointRadius:0, tension:.3, spanGaps:true});
+  if(hours.some(h=>h.ens)){
+    ds.unshift({label:'Ensemble 10%', data:hours.map(h=>h.ens?h.ens.p10:null), borderColor:'rgba(0,0,0,0)', backgroundColor:'rgba(37,99,235,.13)', pointRadius:0, tension:.3, spanGaps:true, fill:'+1', legendSkip:true});
+    ds.splice(1,0,{label:'Ensemble 90%', data:hours.map(h=>h.ens?h.ens.p90:null), borderColor:'rgba(0,0,0,0)', backgroundColor:'rgba(37,99,235,.13)', pointRadius:0, tension:.3, spanGaps:true, fill:false, legendSkip:true});
+  }
   const common = {responsive:true, maintainAspectRatio:false, animation:false, interaction:{mode:'index',intersect:false},
-    plugins:{legend:{display:false}, tooltip:{itemSort:(a,b)=>b.parsed.y-a.parsed.y}},
+    plugins:{legend:{display:false}, filler:{propagate:false}, tooltip:{itemSort:(a,b)=>b.parsed.y-a.parsed.y, filter:i=>!/^Ensemble/.test(i.dataset.label)}},
     scales:{x:{ticks:{maxTicksLimit:8, maxRotation:0}, grid:{display:false}}}};
   state.charts.temp = new Chart($('tempChart'), {type:'line', data:{labels, datasets:ds},
     options:{...common, scales:{...common.scales, y:{ticks:{callback:v=>v+'°'}}}}});
-  $('tempLegend').innerHTML = ds.map(d=>'<span><i style="background:'+d.borderColor+(d.label==='Blend'?';height:4px':'')+'"></i>'+esc(d.label)+'</span>').join('');
+  $('tempLegend').innerHTML = (hours.some(h=>h.ens) ? '<span><i style="background:rgba(37,99,235,.25);height:8px"></i>Ensemble range (80% of '+state.ens.n+' runs)</span>' : '') + ds.filter(d=>!d.legendSkip).map(d=>'<span><i style="background:'+d.borderColor+(d.label==='Blend'?';height:4px':'')+'"></i>'+esc(d.label)+'</span>').join('');
 
   state.charts.rain = new Chart($('rainChart'), {data:{labels, datasets:[
     {type:'bar', label:'Rain chance %', data:hours.map(h=>h.pop), backgroundColor:'rgba(37,99,235,.35)', yAxisID:'y'},
+    ...(hours.some(h=>h.ens&&isNum(h.ens.rain)) ? [{type:'line', label:'Ensemble odds %', data:hours.map(h=>h.ens?h.ens.rain:null), borderColor:'#7c3aed', borderWidth:2, borderDash:[5,4], pointRadius:0, yAxisID:'y', tension:.3, spanGaps:true}] : []),
     {type:'line', label:'Amount (in/hr)', data:hours.map(h=>h.precip), borderColor:'#1e3a8a', borderWidth:2, pointRadius:0, yAxisID:'y2', tension:.3}
   ]}, options:{...common, plugins:{legend:{display:true, labels:{boxWidth:10}}},
     scales:{...common.scales, y:{min:0,max:100,ticks:{callback:v=>v+'%'}}, y2:{position:'right',min:0,suggestedMax:0.1,grid:{display:false}}}}});
+  const airs = hours.map(hourAir);
+  state.charts.air = new Chart($('airChart'), {type:'line', data:{labels, datasets:[
+    {label:'Density altitude (ft)', data:airs.map(a=>a?Math.round(a.da):null), borderColor:'#b45309', borderWidth:2.5, pointRadius:0, tension:.3, yAxisID:'y'},
+    {label:'Grains', data:airs.map(a=>a?Math.round(a.grains):null), borderColor:'#0891b2', borderWidth:2, borderDash:[5,4], pointRadius:0, tension:.3, yAxisID:'y2'}
+  ]}, options:{...common, plugins:{legend:{display:true, labels:{boxWidth:10}}},
+    scales:{...common.scales, y:{ticks:{callback:v=>v.toLocaleString()}}, y2:{position:'right', grid:{display:false}}}}});
 }
 
 function renderHourTable(hours){
   const rows = hours.slice(0,24).map(h=>{
-    const d = h.d || {};
+    const d = h.d || {}, a = hourAir(h);
     const rng = (a,b)=> isNum(a)&&isNum(b)&&Math.round(a)!==Math.round(b) ? ' <span class="rng">'+Math.round(a)+'–'+Math.round(b)+'</span>' : '';
     return '<tr><td>'+fmtHour(h.t)+'</td><td><b>'+fmtT(h.temp)+'</b>'+rng(h.tMin,h.tMax)+'</td><td>'+fmtT(d.feels)+'</td>'+
       '<td class="rain">'+fmtPct(h.pop)+rng(h.popMin,h.popMax)+'</td><td>'+fmtIn(h.precip)+'</td>'+
       '<td>'+fmtMph(h.wind)+' '+compass(d.dir)+'</td><td>'+fmtMph(h.gust)+'</td><td>'+fmtPct(d.rh)+'</td><td>'+fmtT(d.dew)+'</td>'+
-      '<td>'+fmtPct(d.cloud)+'</td><td>'+(isNum(d.solar)?r0(d.solar):'–')+'</td><td>'+(isNum(d.uv)?d.uv.toFixed(1):'–')+'</td></tr>';
+      '<td>'+fmtPct(d.cloud)+'</td><td>'+(isNum(d.solar)?r0(d.solar):'–')+'</td><td>'+(isNum(d.uv)?d.uv.toFixed(1):'–')+'</td>'+
+      '<td>'+(a?Math.round(a.da).toLocaleString():'–')+'</td><td>'+(a?Math.round(a.grains):'–')+'</td>'+
+      (isNum(state.place.heading) ? '<td>'+twText(trackWind(h.wind, d.dir, state.place.heading), true)+'</td>' : '')+'</tr>';
   }).join('');
-  $('hourTable').innerHTML = '<thead><tr><th>Time</th><th>Temp</th><th>Feels</th><th>Rain</th><th>Amt</th><th>Wind mph</th><th>Gust</th><th>RH</th><th>Dew</th><th>Cloud</th><th>Solar W/m²</th><th>UV</th></tr></thead><tbody>'+rows+'</tbody>';
+  $('hourTable').innerHTML = '<thead><tr><th>Time</th><th>Temp</th><th>Feels</th><th>Rain</th><th>Amt</th><th>Wind mph</th><th>Gust</th><th>RH</th><th>Dew</th><th>Cloud</th><th>Solar W/m²</th><th>UV</th><th>DA ft</th><th>Grains</th>'+(isNum(state.place.heading)?'<th>Track wind</th>':'')+'</tr></thead><tbody>'+rows+'</tbody>';
 }
 
 function renderDays(days){
@@ -805,8 +1079,8 @@ function renderDays(days){
       '<div class="dayrow"><div class="dname"><b>'+L.name+'</b><span>'+L.sub+'</span></div>'+
       '<div class="emoji">'+weatherEmoji(d.text, d.pop)+'</div>'+
       '<div><div class="dtemps"><b>'+fmtT(d.hi)+'</b> <span class="lo">/ '+fmtT(d.lo)+'</span></div><div class="dmeta">'+esc(d.text||'')+(hiR?' · highs '+hiR:'')+'</div></div>'+
-      '<div class="dright"><div class="rain">💧 '+fmtPct(d.pop)+'</div><div class="dmeta">'+(d.nModels? d.wet+'/'+d.nModels+' models wet':'')+'</div><span class="conf '+d.conf+'">'+d.conf+'</span></div></div>'+
-      '<div class="ddetail hidden">'+(nw.detail?'<div class="txt"><b>NWS day:</b> '+esc(nw.detail)+'</div>':'')+(nw.night?'<div class="txt"><b>NWS night:</b> '+esc(nw.night)+'</div>':'')+
+      '<div class="dright"><div class="rain">💧 '+fmtPct(d.pop)+'</div><div class="dmeta">'+(d.ens ? d.ens.nWet+'/'+d.ens.n+' runs wet' : d.nModels ? d.wet+'/'+d.nModels+' models wet' : '')+'</div><span class="conf '+d.conf+'">'+d.conf+'</span></div></div>'+
+      '<div class="ddetail hidden">'+(d.ens ? '<div class="txt"><b>Ensembles ('+d.ens.n+' runs):</b> high most likely '+fmtT(d.ens.hi50)+', 80% chance between '+fmtT(d.ens.hi10)+' and '+fmtT(d.ens.hi90)+'. Rain in '+d.ens.nWet+' of '+d.ens.n+' runs ('+fmtPct(d.ens.rain)+').</div>' : '')+(nw.detail?'<div class="txt"><b>NWS day:</b> '+esc(nw.detail)+'</div>':'')+(nw.night?'<div class="txt"><b>NWS night:</b> '+esc(nw.night)+'</div>':'')+
       '<div class="tablewrap"><table><thead><tr><th>Source</th><th>High</th><th>Low</th><th>Rain %</th><th>Amount</th><th>Gust</th></tr></thead><tbody>'+srcRows+omRow+'</tbody></table></div></div>'+
     '</div>';
   }).join('');
@@ -819,44 +1093,61 @@ $('days').addEventListener('click', e=>{
 function render(){
   const hours = buildHours(48), days = buildDays(7);
   renderPlace(); renderSources(); renderAlerts();
-  renderDavis(hours); renderNow(hours, days); renderSummary(hours, days);
+  renderDavis(hours); renderAir(hours); renderNow(hours, days); renderSummary(hours, days); renderAFD();
   renderCharts(hours); renderHourTable(hours); renderDays(days);
   const okN = okSources().length;
   $('updated').textContent = 'Updated '+new Date(state.loadedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})+' · '+okN+' sources blended';
-  if(radar.map){ radar.map.setView([state.place.lat, state.place.lon], radar.map.getZoom()); radar.marker.setLatLng([state.place.lat, state.place.lon]); }
+  if(radar.map){ radar.map.setView([state.place.lat, state.place.lon], radar.map.getZoom()); radar.marker.setLatLng([state.place.lat, state.place.lon]); if(currentTab==='radar') loadWarnings(); }
   if(currentTab==='windy') loadWindy(); else windyLoadedFor = null;
 }
 
-/* ---------- radar ---------- */
-const radar = {map:null, frames:[], layers:[], idx:0, timer:null, host:''};
+/* ---------- radar: NWS NEXRAD composite via Iowa State Mesonet ---------- */
+const IEM = 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/';
+const radar = {map:null, frames:[], layers:[], idx:0, timer:null, warn:null, loadedAt:0};
+const WARN_COLORS = {'Tornado Warning':'#dc2626','Severe Thunderstorm Warning':'#f59e0b','Flash Flood Warning':'#16a34a','Special Marine Warning':'#0ea5e9',
+  'Tornado Watch':'#f472b6','Severe Thunderstorm Watch':'#db2777','Flood Warning':'#22c55e','Winter Storm Warning':'#ec4899','Special Weather Statement':'#eab308'};
 async function initRadar(){
   if(typeof L === 'undefined'){ $('radarTime').textContent = 'Map library failed to load'; return; }
   if(!radar.map){
-    radar.map = L.map('radarMap', {zoomControl:true, attributionControl:true}).setView([state.place.lat, state.place.lon], 7);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {maxZoom:12, subdomains:'abcd',
-      attribution:'&copy; OpenStreetMap &copy; CARTO | Radar &copy; RainViewer'}).addTo(radar.map);
-    radar.marker = L.circleMarker([state.place.lat, state.place.lon], {radius:6, color:'#111827', weight:2, fillColor:'#fff', fillOpacity:1}).addTo(radar.map);
+    radar.map = L.map('radarMap', {zoomControl:true, attributionControl:true}).setView([state.place.lat, state.place.lon], 8);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {maxZoom:13, subdomains:'abcd',
+      attribution:'&copy; OpenStreetMap &copy; CARTO | Radar: NWS NEXRAD via Iowa Environmental Mesonet | Warnings: NWS'}).addTo(radar.map);
+    radar.marker = L.circleMarker([state.place.lat, state.place.lon], {radius:6, color:'#111827', weight:2, fillColor:'#fff', fillOpacity:1, zIndexOffset:1000}).addTo(radar.map);
   }
   setTimeout(()=>radar.map.invalidateSize(), 50);
-  try{
-    const j = await getJSON('https://api.rainviewer.com/public/weather-maps.json');
+  // rebuild the loop at most every 4 minutes (IEM updates every 5)
+  if(Date.now() - radar.loadedAt > 4*60000){
+    radar.loadedAt = Date.now();
     radar.layers.forEach(l=>radar.map.removeLayer(l));
-    radar.host = j.host;
-    radar.frames = [...(j.radar.past||[]), ...(j.radar.nowcast||[])];
-    radar.layers = radar.frames.map(f=>L.tileLayer(j.host+f.path+'/256/{z}/{x}/{y}/2/1_1.png', {opacity:0, maxNativeZoom:7, maxZoom:12, zIndex:10}).addTo(radar.map));
-    $('radarSlider').max = Math.max(0, radar.frames.length-1);
+    const bust = Math.floor(Date.now()/300000);
+    radar.frames = [50,45,40,35,30,25,20,15,10,5,0].map(m=>({ago:m, layer:'nexrad-n0q-900913'+(m?'-m'+String(m).padStart(2,'0')+'m':'')}));
+    radar.layers = radar.frames.map(f=>L.tileLayer(IEM+f.layer+'/{z}/{x}/{y}.png?'+bust, {opacity:0, maxZoom:13, zIndex:10}).addTo(radar.map));
+    $('radarSlider').max = radar.frames.length-1;
     showFrame(radar.frames.length-1);
     playRadar(true);
-  }catch(e){ $('radarTime').textContent = 'Radar unavailable ('+e.message+')'; }
+  }
+  loadWarnings();
+}
+async function loadWarnings(){
+  if(!state.stateCode || !radar.map) return;
+  try{
+    const j = await getJSON('https://api.weather.gov/alerts/active?area='+state.stateCode, {headers:{Accept:'application/geo+json'}});
+    if(radar.warn) radar.map.removeLayer(radar.warn);
+    const feats = (j.features||[]).filter(f=>f.geometry);
+    radar.warn = L.geoJSON({type:'FeatureCollection', features:feats}, {
+      style: f=>({color: WARN_COLORS[f.properties.event] || '#6b7280', weight:2, fillOpacity:.08}),
+      onEachFeature: (f, l)=>l.bindPopup('<b>'+esc(f.properties.event)+'</b><br>'+esc(f.properties.headline||''))
+    }).addTo(radar.map);
+    $('radarWarn').textContent = feats.length ? feats.length+' active warning area(s) outlined in '+state.stateCode+' — tap one for details.' : 'No storm-based warnings outlined in '+state.stateCode+' right now.';
+  }catch(e){ $('radarWarn').textContent = 'Warnings unavailable ('+e.message+')'; }
 }
 function showFrame(i){
   if(!radar.frames.length) return;
   radar.idx = (i + radar.frames.length) % radar.frames.length;
-  radar.layers.forEach((l,k)=>l.setOpacity(k===radar.idx ? 0.75 : 0));
+  radar.layers.forEach((l,k)=>l.setOpacity(k===radar.idx ? 0.7 : 0));
   $('radarSlider').value = radar.idx;
   const f = radar.frames[radar.idx];
-  const past = radar.idx < radar.frames.length && f.time*1000 <= Date.now();
-  $('radarTime').textContent = new Date(f.time*1000).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}) + (past?'':' (forecast)');
+  $('radarTime').textContent = f.ago ? f.ago+' min ago' : 'Latest';
 }
 function playRadar(on){
   clearInterval(radar.timer); radar.timer = null;
@@ -910,11 +1201,66 @@ $('savedPlaces').onclick = e=>{
 $('btnSave').onclick = ()=>{
   const saved = store.get('saved', [DEFAULT_PLACE]);
   if(!saved.some(p=>Math.abs(p.lat-state.place.lat)<0.01 && Math.abs(p.lon-state.place.lon)<0.01)){
-    saved.push({name:state.place.name, lat:state.place.lat, lon:state.place.lon}); store.set('saved', saved);
+    saved.push({name:state.place.name, lat:state.place.lat, lon:state.place.lon, heading:state.place.heading}); store.set('saved', saved);
   }
   renderSaved();
 };
-$('btnSearch').onclick = ()=>{ $('searchCard').classList.toggle('hidden'); renderSaved(); if(!$('searchCard').classList.contains('hidden')) $('searchInput').focus(); };
+/* ---------- track direction ---------- */
+function renderTrackDir(){
+  $('tdPlace').textContent = state.place.name;
+  const h = state.place.heading;
+  $('tdInput').value = isNum(h) ? Math.round(h) : '';
+  $('tdCompass').textContent = isNum(h) ? compass(h) : 'not set';
+}
+function setHeading(h){
+  if(isNum(h)) h = ((h % 360) + 360) % 360; else h = undefined;
+  state.place.heading = h;
+  store.set('place', state.place);
+  const saved = store.get('saved', [DEFAULT_PLACE]);
+  const m = saved.find(p=>Math.abs(p.lat-state.place.lat)<0.01 && Math.abs(p.lon-state.place.lon)<0.01);
+  if(m){ m.heading = h; store.set('saved', saved); }
+  renderTrackDir();
+  if(state.loadedAt) render();
+}
+$('tdInput').oninput = ()=>{ const v = parseFloat($('tdInput').value); $('tdCompass').textContent = isNum(v) ? compass(((v%360)+360)%360) : ''; };
+$('tdSave').onclick = ()=>{ const v = parseFloat($('tdInput').value); if(isNum(v)) setHeading(v); };
+$('tdClear').onclick = ()=>setHeading(null);
+const tdm = {map:null, pts:[], layers:[], heading:null};
+function tdResetPts(){
+  tdm.layers.forEach(l=>tdm.map.removeLayer(l)); tdm.layers=[]; tdm.pts=[]; tdm.heading=null;
+  $('tdStep').innerHTML = 'Zoom to the strip, then tap the <b>starting line</b>.';
+  $('tdResult').textContent = ''; $('tdUse').disabled = true;
+}
+$('tdMap').onclick = ()=>{
+  if(typeof L === 'undefined') return;
+  $('tdModal').classList.remove('hidden');
+  if(!tdm.map){
+    tdm.map = L.map('tdMapEl').setView([state.place.lat, state.place.lon], 16);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {maxZoom:19,
+      attribution:'Imagery &copy; Esri'}).addTo(tdm.map);
+    tdm.map.on('click', e=>{
+      if(tdm.pts.length >= 2) tdResetPts();
+      tdm.pts.push(e.latlng);
+      tdm.layers.push(L.circleMarker(e.latlng, {radius:7, color:'#fff', weight:2, fillColor: tdm.pts.length===1?'#16a34a':'#dc2626', fillOpacity:1}).addTo(tdm.map));
+      if(tdm.pts.length === 1){ $('tdStep').innerHTML = 'Now tap the <b>finish line</b> (far end of the strip).'; }
+      else {
+        const [a,b] = tdm.pts;
+        tdm.layers.push(L.polyline([a,b], {color:'#facc15', weight:4}).addTo(tdm.map));
+        tdm.heading = bearing(a.lat, a.lng, b.lat, b.lng);
+        $('tdStep').textContent = 'Got it. Tap again to redo.';
+        $('tdResult').textContent = 'Cars run '+Math.round(tdm.heading)+'° '+compass(tdm.heading);
+        $('tdUse').disabled = false;
+      }
+    });
+  } else tdm.map.setView([state.place.lat, state.place.lon], 16);
+  tdResetPts();
+  setTimeout(()=>tdm.map.invalidateSize(), 60);
+};
+$('tdReset').onclick = tdResetPts;
+$('tdModalClose').onclick = ()=>$('tdModal').classList.add('hidden');
+$('tdUse').onclick = ()=>{ setHeading(tdm.heading); $('tdModal').classList.add('hidden'); };
+
+$('btnSearch').onclick = ()=>{ $('searchCard').classList.toggle('hidden'); renderSaved(); renderTrackDir(); if(!$('searchCard').classList.contains('hidden')) $('searchInput').focus(); };
 $('searchForm').onsubmit = async e=>{
   e.preventDefault();
   const q = $('searchInput').value.trim(); if(!q) return;
