@@ -403,6 +403,31 @@ function parseOpenMeteo(j){
   if(!hourly.length) throw new Error('no data for this location');
   return {hourly, daily};
 }
+// one request for every model; keys come back suffixed with the model name
+let _multi = null;
+function fetchModelsMulti(lat, lon){
+  const key = lat+','+lon+','+Math.floor(Date.now()/60000);
+  if(_multi && _multi.key === key) return _multi.p;
+  const names = MODELS.map(m=>m.models[0]);
+  const u = 'https://api.open-meteo.com/v1/forecast?latitude='+lat+'&longitude='+lon+'&models='+names.join(',')+
+    '&hourly=temperature_2m,precipitation,wind_speed_10m,wind_gusts_10m,cloud_cover'+
+    '&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_gusts_10m_max'+
+    '&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&timeformat=unixtime&forecast_days=8';
+  _multi = {key, p: getJSON(u)};
+  return _multi.p;
+}
+function pickModel(j, name){
+  const strip = obj => { const o = {time: obj.time}; for(const k of Object.keys(obj)) if(k.endsWith('_'+name)) o[k.slice(0, -name.length-1)] = obj[k]; return o; };
+  return {hourly: strip(j.hourly||{}), daily: strip(j.daily||{})};
+}
+async function fetchModelFast(m, lat, lon){
+  try{
+    const j = await fetchModelsMulti(lat, lon);
+    return parseOpenMeteo(pickModel(j, m.models[0]));
+  }catch(e){
+    return fetchModel(m, lat, lon);   // fall back to one request per model
+  }
+}
 async function fetchModel(m, lat, lon){
   let lastErr;
   for(const mod of m.models){
@@ -618,7 +643,7 @@ function makeSources(){
   const k = keys();
   const list = [
     {id:'nws', name:'NWS', full:'National Weather Service', color:'#111827', temp:true, pop:true, run:(la,lo)=>fetchNWS(la,lo)},
-    ...MODELS.map(m=>({id:m.id, name:m.name, full:m.full, color:m.color, temp:true, pop:false, model:true, run:(la,lo)=>fetchModel(m,la,lo)})),
+    ...MODELS.map(m=>({id:m.id, name:m.name, full:m.full, color:m.color, temp:true, pop:false, model:true, run:(la,lo)=>fetchModelFast(m,la,lo)})),
     {id:'tomorrow', name:'Tomorrow.io', full:'Tomorrow.io', color:'#f97316', temp:true, pop:true, off:!k.tomorrow, run:(la,lo)=>fetchTomorrow(la,lo,k.tomorrow)},
     {id:'accu', name:'AccuWeather', full:'AccuWeather (5-day)', color:'#ea580c', temp:true, pop:true, off:!k.accu, run:(la,lo)=>fetchAccu(la,lo,k.accu)},
     {id:'wu', name:'Wunderground', full:'Weather Underground (5-day)', color:'#0f766e', temp:true, pop:true, off:!k.wu, run:(la,lo)=>fetchWU(la,lo,k.wu)},
@@ -652,6 +677,9 @@ async function loadAll(){
   await Promise.all([...jobs, det, ens, loadDavis()]);
   state.loading = false;
   state.loadedAt = Date.now();
+  const bad = state.sources.filter(s=>s.status==='fail');
+  $('sourceMsg').textContent = bad.length ? '⚠️ '+bad.map(s=>s.name).join(', ')+' failed: '+bad[0].error+(state.detail?'':' · Open-Meteo blend failed: '+(state.detailError||'')) :
+    (!state.detail && state.detailError ? '⚠️ Open-Meteo blend failed: '+state.detailError : '');
   render();
 }
 
@@ -1110,8 +1138,11 @@ async function initRadar(){
   if(typeof L === 'undefined'){ $('radarTime').textContent = 'Map library failed to load'; return; }
   if(!radar.map){
     radar.map = L.map('radarMap', {zoomControl:true, attributionControl:true}).setView([state.place.lat, state.place.lon], 8);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {maxZoom:13, subdomains:'abcd',
-      attribution:'&copy; OpenStreetMap &copy; CARTO | Radar: NWS NEXRAD via Iowa Environmental Mesonet | Warnings: NWS'}).addTo(radar.map);
+    const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/';
+    L.tileLayer(ESRI+'World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', {maxZoom:13, maxNativeZoom:16,
+      attribution:'Basemap &copy; Esri, HERE, Garmin, OpenStreetMap | Radar: NWS NEXRAD via Iowa Environmental Mesonet | Warnings: NWS'}).addTo(radar.map);
+    radar.map.createPane('labels'); radar.map.getPane('labels').style.zIndex = 650; radar.map.getPane('labels').style.pointerEvents = 'none';
+    L.tileLayer(ESRI+'World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {maxZoom:13, maxNativeZoom:16, pane:'labels'}).addTo(radar.map);
     radar.marker = L.circleMarker([state.place.lat, state.place.lon], {radius:6, color:'#111827', weight:2, fillColor:'#fff', fillOpacity:1, zIndexOffset:1000}).addTo(radar.map);
   }
   setTimeout(()=>radar.map.invalidateSize(), 50);
