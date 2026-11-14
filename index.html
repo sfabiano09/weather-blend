@@ -180,6 +180,7 @@
   <div class="tabs">
     <button class="btn tab on" data-tab="hourly">Hourly</button>
     <button class="btn tab" data-tab="daily">7-Day</button>
+    <button class="btn tab" data-tab="sky">Sky</button>
     <button class="btn tab" data-tab="radar">Radar</button>
     <button class="btn tab" data-tab="windy">Windy</button>
   </div>
@@ -209,6 +210,20 @@
     <div class="card">
       <h2>7-day blend — tap a day for each source</h2>
       <div id="days"></div>
+    </div>
+  </section>
+
+  <section id="tab-sky" class="hidden">
+    <div class="card">
+      <h2>Clouds &amp; winds aloft — next 48 hrs</h2>
+      <ul class="summary" id="skySummary"><li class="muted">Loading…</li></ul>
+      <div class="tablewrap" style="margin-top:10px"><div id="skyChart"></div></div>
+      <div class="legend" style="margin-top:8px">
+        <span><i style="background:#94a3b8;height:10px;width:14px"></i>Gray = cloud at that height (darker = thicker)</span>
+        <span>➤ Arrow = direction the wind is carrying clouds (toward), number = mph</span>
+        <span><i style="background:#2563eb"></i>&lt;20</span><span><i style="background:#16a34a"></i>20–40</span><span><i style="background:#d97706"></i>40–60</span><span><i style="background:#dc2626"></i>60+ mph</span>
+      </div>
+      <div class="muted" style="margin-top:6px" id="skyNote"></div>
     </div>
   </section>
 
@@ -1128,6 +1143,110 @@ function render(){
   $('updated').textContent = 'Updated '+new Date(state.loadedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})+' · '+okN+' sources blended';
   if(radar.map){ radar.map.setView([state.place.lat, state.place.lon], radar.map.getZoom()); radar.marker.setLatLng([state.place.lat, state.place.lon]); if(currentTab==='radar') loadWarnings(); }
   if(currentTab==='windy') loadWindy(); else windyLoadedFor = null;
+  if(currentTab==='sky') loadSky(sky.key !== state.place.lat+','+state.place.lon || Date.now()-(sky.at||0) > 30*60000);
+}
+
+/* ---------- sky: clouds & winds at altitude (pressure levels) ---------- */
+const LEVELS = [1000,975,950,925,900,850,800,700,600,500,400,300,250,200];
+const sky = {data:null, key:null, loading:false};
+async function fetchAloft(lat, lon){
+  const vars = LEVELS.flatMap(l=>['wind_speed_'+l+'hPa','wind_direction_'+l+'hPa','cloud_cover_'+l+'hPa','geopotential_height_'+l+'hPa']);
+  const base = 'https://api.open-meteo.com/v1/forecast?latitude='+lat+'&longitude='+lon+'&hourly='+vars.join(',')+
+    ',wind_speed_10m,wind_direction_10m,cloud_cover_low,cloud_cover_mid,cloud_cover_high&wind_speed_unit=mph&timezone=auto&timeformat=unixtime&forecast_days=3';
+  let j;
+  try{ j = await getJSON(base); }catch(e){ j = await getJSON(base+'&models=gfs_seamless'); }
+  return j;
+}
+async function loadSky(force){
+  const {lat, lon} = state.place, key = lat+','+lon;
+  if(sky.loading) return;
+  if(!force && sky.data && sky.key===key && Date.now()-sky.at < 30*60000){ renderSky(); return; }
+  sky.loading = true;
+  $('skySummary').innerHTML = '<li class="muted">Loading…</li>';
+  try{ sky.data = await fetchAloft(lat, lon); sky.key = key; sky.at = Date.now(); renderSky(); }
+  catch(e){ $('skySummary').innerHTML = '<li>⚠️ Couldn\'t load winds aloft ('+esc(e.message)+')</li>'; $('skyChart').innerHTML=''; }
+  finally{ sky.loading = false; }
+}
+const spdColor = v => !isNum(v) ? '#9ca3af' : v<20 ? '#2563eb' : v<40 ? '#16a34a' : v<60 ? '#d97706' : '#dc2626';
+const ftFmt = v => v>=1000 ? (Math.round(v/500)*500).toLocaleString() : String(Math.round(v/50)*50);
+function renderSky(){
+  const j = sky.data; if(!j || !j.hourly) return;
+  const h = j.hourly, elev = isNum(j.elevation) ? j.elevation : (state.elevM||0);
+  const now = Math.floor(Date.now()/3600000)*3600;
+  let i0 = h.time.findIndex(t=>t>=now); if(i0<0) i0 = 0;
+  const cols = []; for(let k=0;k<=16;k++){ const i=i0+k*3; if(i<h.time.length) cols.push(i); }
+  const get = (v,l,i) => { const a = h[v+'_'+l+'hPa']; return a ? a[i] : null; };
+  const agl = (l,i) => { const g = get('geopotential_height',l,i); return isNum(g) ? (g-elev)*3.281 : null; };
+  // rows: levels above ground, below ~40,000 ft, highest first
+  const levels = LEVELS.filter(l=>{ const a = agl(l,i0); return isNum(a) && a > 150 && a < 42000; }).reverse();
+  if(!levels.length){ $('skySummary').innerHTML = '<li>No upper-air data for this location.</li>'; return; }
+
+  // ---- plain-English: which way are the clouds moving right now?
+  const lines = [];
+  const cloudy = levels.slice().reverse().filter(l=>(get('cloud_cover',l,i0)||0) >= 40);
+  const groups = [];
+  for(const l of cloudy){
+    const a = agl(l,i0), last = groups[groups.length-1];
+    if(last && a - last.top < 4000){ last.top = a; last.levels.push(l); } else groups.push({bot:a, top:a, levels:[l]});
+  }
+  groups.slice(0,3).forEach(g=>{
+    const mid = g.levels[Math.floor(g.levels.length/2)];
+    const dir = get('wind_direction',mid,i0), spd = get('wind_speed',mid,i0), cc = Math.max(...g.levels.map(l=>get('cloud_cover',l,i0)||0));
+    const band = Math.abs(g.top-g.bot) < 800 ? '~'+ftFmt(g.bot)+' ft' : ftFmt(g.bot)+'–'+ftFmt(g.top)+' ft';
+    const kind = g.bot < 6500 ? 'Low clouds' : g.bot < 20000 ? 'Mid-level clouds' : 'High clouds';
+    lines.push('☁️ <b>'+kind+'</b> at '+band+' ('+Math.round(cc)+'% cover) are moving <b>toward the '+compass((dir+180)%360)+'</b> at about <b>'+Math.round(spd)+' mph</b> (wind from the '+compass(dir)+').');
+  });
+  if(!groups.length){
+    const mx = Math.max(...levels.map(l=>get('cloud_cover',l,i0)||0));
+    lines.push(mx >= 15 ? '🌤️ Only thin or scattered cloud aloft right now (up to '+Math.round(mx)+'% at any level).' : '☀️ Clear skies aloft right now.');
+  }
+  // incoming: first future column where low/mid cloud (below 20k ft) reaches 60%
+  const k60 = cols.findIndex((i,k)=>k>0 && levels.some(l=>(agl(l,i)||0)<20000 && (get('cloud_cover',l,i)||0)>=60));
+  if(!groups.length && k60>0) lines.push('⛅ Clouds below 20,000 ft thicken by about <b>'+fmtHour(h.time[cols[k60]]*1000)+'</b>.');
+  const sfcDir = h.wind_direction_10m && h.wind_direction_10m[i0], lowL = levels[levels.length-1];
+  const lowDir = get('wind_direction', lowL, i0);
+  if(isNum(sfcDir) && isNum(lowDir)){
+    let diff = Math.abs(sfcDir-lowDir)%360; if(diff>180) diff = 360-diff;
+    if(diff >= 60) lines.push('↪️ Surface wind ('+compass(sfcDir)+') differs from the wind a little higher up ('+compass(lowDir)+' at ~'+ftFmt(agl(lowL,i0))+' ft), so clouds can move a different way than you feel on the ground.');
+  }
+  $('skySummary').innerHTML = lines.map(l=>'<li>'+l+'</li>').join('');
+
+  // ---- meteogram (SVG)
+  const LW = 92, CW = 46, RH = 34, TOP = 30;
+  const rowsAll = [...levels, 'sfc'];
+  const W = LW + cols.length*CW, H = TOP + rowsAll.length*RH + 4;
+  let svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'" style="font:11px -apple-system,Segoe UI,Roboto,sans-serif;display:block">';
+  cols.forEach((i,c)=>{
+    const x = LW + c*CW;
+    const lab = fmtHour(h.time[i]*1000).replace(' ','');
+    const d = new Date(h.time[i]*1000), newDay = c===0 || dkey(h.time[i]*1000) !== dkey(h.time[cols[c-1]]*1000);
+    svg += '<text x="'+(x+CW/2)+'" y="'+(newDay?11:22)+'" text-anchor="middle" fill="'+(newDay?'#111827':'#6b7280')+'" font-weight="'+(newDay?600:400)+'">'+(newDay ? dayLabel(dkey(d.getTime())).sub.split(' ')[0] : '')+'</text>';
+    svg += '<text x="'+(x+CW/2)+'" y="24" text-anchor="middle" fill="#6b7280">'+lab+'</text>';
+    if(c>0) svg += '<line x1="'+x+'" y1="'+TOP+'" x2="'+x+'" y2="'+(H-4)+'" stroke="#f1f5f9"/>';
+  });
+  rowsAll.forEach((l,r)=>{
+    const y = TOP + r*RH;
+    const label = l==='sfc' ? 'Surface' : ftFmt(agl(l,i0))+' ft';
+    svg += '<text x="'+(LW-8)+'" y="'+(y+RH/2+4)+'" text-anchor="end" fill="#374151" font-weight="'+(l==='sfc'?600:400)+'">'+label+'</text>';
+    if(l!=='sfc') svg += '<text x="'+(LW-8)+'" y="'+(y+RH/2+14)+'" text-anchor="end" fill="#9ca3af" font-size="9">'+l+' hPa</text>';
+    cols.forEach((i,c)=>{
+      const x = LW + c*CW;
+      let cc, dir, spd;
+      if(l==='sfc'){ cc = null; dir = h.wind_direction_10m && h.wind_direction_10m[i]; spd = h.wind_speed_10m && h.wind_speed_10m[i]; }
+      else { cc = get('cloud_cover',l,i); dir = get('wind_direction',l,i); spd = get('wind_speed',l,i); }
+      if(isNum(cc) && cc > 5) svg += '<rect x="'+x+'" y="'+y+'" width="'+CW+'" height="'+RH+'" fill="#64748b" fill-opacity="'+(0.08+0.62*cc/100).toFixed(2)+'"><title>'+Math.round(cc)+'% cloud</title></rect>';
+      if(isNum(dir) && isNum(spd)){
+        const cx = x+CW/2, cy = y+RH/2-4, col = spdColor(spd), rot = (dir+180)%360;
+        svg += '<g transform="translate('+cx+','+cy+') rotate('+rot.toFixed(0)+')"><title>From '+compass(dir)+' ('+Math.round(dir)+'°) at '+Math.round(spd)+' mph'+(isNum(cc)?' · '+Math.round(cc)+'% cloud':'')+'</title>'+
+          '<line x1="0" y1="8" x2="0" y2="-7" stroke="'+col+'" stroke-width="2"/><path d="M0,-10 L-4.5,-3 L4.5,-3 Z" fill="'+col+'"/></g>';
+        svg += '<text x="'+cx+'" y="'+(y+RH-3)+'" text-anchor="middle" fill="'+col+'" font-size="10" font-weight="600">'+Math.round(spd)+'</text>';
+      }
+    });
+    if(l==='sfc') svg += '<line x1="'+LW+'" y1="'+y+'" x2="'+W+'" y2="'+y+'" stroke="#111827" stroke-width="1.5"/>';
+  });
+  svg += '</svg>';
+  $('skyChart').innerHTML = svg;
+  $('skyNote').textContent = 'Heights are above the ground here ('+Math.round(elev*3.281).toLocaleString()+' ft elevation) and shift a little hour to hour. Arrows point where the air is going, so clouds at that height drift that way. Source: Open-Meteo best-match model (GFS/HRRR in the US) on pressure levels. Tap-and-hold or hover a cell for exact numbers.';
 }
 
 /* ---------- radar: NWS NEXRAD composite via Iowa State Mesonet ---------- */
@@ -1219,7 +1338,8 @@ let currentTab = 'hourly';
 function setTab(t){
   currentTab = t; store.set('tab', t);
   document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('on', b.dataset.tab===t));
-  ['hourly','daily','radar','windy'].forEach(x=>$('tab-'+x).classList.toggle('hidden', x!==t));
+  ['hourly','daily','sky','radar','windy'].forEach(x=>$('tab-'+x).classList.toggle('hidden', x!==t));
+  if(t==='sky') loadSky();
   if(t==='radar') initRadar(); else playRadar(false);
   if(t==='windy') loadWindy();
   if(t==='hourly') Object.values(state.charts).forEach(c=>c.resize());
