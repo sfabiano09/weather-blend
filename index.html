@@ -1222,8 +1222,34 @@ function renderSky(){
     const d = new Date(h.time[i]*1000), newDay = c===0 || dkey(h.time[i]*1000) !== dkey(h.time[cols[c-1]]*1000);
     svg += '<text x="'+(x+CW/2)+'" y="'+(newDay?11:22)+'" text-anchor="middle" fill="'+(newDay?'#111827':'#6b7280')+'" font-weight="'+(newDay?600:400)+'">'+(newDay ? dayLabel(dkey(d.getTime())).sub.split(' ')[0] : '')+'</text>';
     svg += '<text x="'+(x+CW/2)+'" y="24" text-anchor="middle" fill="#6b7280">'+lab+'</text>';
-    if(c>0) svg += '<line x1="'+x+'" y1="'+TOP+'" x2="'+x+'" y2="'+(H-4)+'" stroke="#f1f5f9"/>';
+    if(c>0) svg += '<line x1="'+x+'" y1="'+(TOP+levels.length*RH)+'" x2="'+x+'" y2="'+(H-4)+'" stroke="#f1f5f9"/>';
   });
+  // ---- clouds: hourly blobs, blurred and roughened so they read like Windy's cloud shapes
+  const plotW = cols.length*CW, plotH = levels.length*RH, hrW = CW/3;
+  svg += '<defs><clipPath id="skyClip"><rect x="'+LW+'" y="'+TOP+'" width="'+plotW+'" height="'+plotH+'"/></clipPath>'+
+    '<filter id="cloudFx" x="-5%" y="-10%" width="110%" height="120%" color-interpolation-filters="sRGB">'+
+      '<feTurbulence type="fractalNoise" baseFrequency="0.045 0.09" numOctaves="3" seed="7" result="noise"/>'+
+      '<feGaussianBlur in="SourceGraphic" stdDeviation="'+(hrW*1.1).toFixed(1)+' '+(RH*0.32).toFixed(1)+'" result="soft"/>'+
+      '<feDisplacementMap in="soft" in2="noise" scale="16" xChannelSelector="R" yChannelSelector="G"/>'+
+    '</filter></defs>';
+  svg += '<rect x="'+LW+'" y="'+TOP+'" width="'+plotW+'" height="'+plotH+'" fill="#eef1f7"/>';
+  let blobs = '';
+  const iEnd = cols[cols.length-1];
+  levels.forEach((l,r)=>{
+    const y = TOP + r*RH;
+    for(let i=i0; i<=iEnd; i++){
+      const cc = get('cloud_cover',l,i);
+      if(!isNum(cc) || cc < 8) continue;
+      const x = LW + CW/2 + (i-i0)/3*CW - hrW/2;
+      const a = Math.min(1, cc/100);
+      // thicker cloud = darker and taller; thin cloud = pale wisp
+      const hgt = RH*(0.55+0.6*a), yy = y + (RH-hgt)/2;
+      const shade = Math.round(240 - 105*a);
+      blobs += '<rect x="'+(x-1).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+(hrW+2).toFixed(1)+'" height="'+hgt.toFixed(1)+'" rx="6" fill="rgb('+shade+','+(shade+4)+','+(shade+12)+')" fill-opacity="'+(0.3+0.6*a).toFixed(2)+'"/>';
+    }
+  });
+  svg += '<g clip-path="url(#skyClip)"><g filter="url(#cloudFx)">'+blobs+'</g></g>';
+
   rowsAll.forEach((l,r)=>{
     const y = TOP + r*RH;
     const label = l==='sfc' ? 'Surface' : ftFmt(agl(l,i0))+' ft';
@@ -1234,7 +1260,7 @@ function renderSky(){
       let cc, dir, spd;
       if(l==='sfc'){ cc = null; dir = h.wind_direction_10m && h.wind_direction_10m[i]; spd = h.wind_speed_10m && h.wind_speed_10m[i]; }
       else { cc = get('cloud_cover',l,i); dir = get('wind_direction',l,i); spd = get('wind_speed',l,i); }
-      if(isNum(cc) && cc > 5) svg += '<rect x="'+x+'" y="'+y+'" width="'+CW+'" height="'+RH+'" fill="#64748b" fill-opacity="'+(0.08+0.62*cc/100).toFixed(2)+'"><title>'+Math.round(cc)+'% cloud</title></rect>';
+      if(isNum(cc)) svg += '<rect x="'+x+'" y="'+y+'" width="'+CW+'" height="'+RH+'" fill="transparent"><title>'+Math.round(cc)+'% cloud</title></rect>';
       if(isNum(dir) && isNum(spd)){
         const cx = x+CW/2, cy = y+RH/2-4, col = spdColor(spd), rot = (dir+180)%360;
         svg += '<g transform="translate('+cx+','+cy+') rotate('+rot.toFixed(0)+')"><title>From '+compass(dir)+' ('+Math.round(dir)+'°) at '+Math.round(spd)+' mph'+(isNum(cc)?' · '+Math.round(cc)+'% cloud':'')+'</title>'+
