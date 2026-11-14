@@ -85,6 +85,14 @@
   select{padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:#fff;font-size:14px}
   .links a{display:inline-block;margin:4px 10px 4px 0;color:var(--blue);text-decoration:none}
   .muted{color:var(--muted);font-size:12.5px}
+  .trk{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--line);cursor:pointer}
+  .trk:last-child{border-bottom:none}
+  .trk:active{background:#f3f4f6}
+  .trk .tn{font-weight:600} .trk .ts{font-size:12.5px;color:var(--muted)}
+  .trk.past .tn{color:#6b7280;font-weight:500}
+  .trk.cur{background:#eff6ff;border-radius:10px}
+  .badge{font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;background:#dcfce7;color:#166534;white-space:nowrap}
+  .badge.here{background:#dbeafe;color:#1e40af}
   .modal{position:fixed;inset:0;background:rgba(17,24,39,.45);display:flex;align-items:flex-end;justify-content:center;z-index:2000}
   .sheet{background:#fff;width:100%;max-width:560px;border-radius:16px 16px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));max-height:88vh;overflow:auto}
   .sheet label{display:block;font-weight:600;margin:12px 0 4px}
@@ -103,10 +111,21 @@
       <div class="sub" id="updated">&nbsp;</div>
     </div>
     <button class="btn" id="btnLocate" title="Use my location">📍</button>
+    <button class="btn" id="btnTracks" title="Track library">🏁</button>
     <button class="btn" id="btnSearch" title="Change place">🔍</button>
     <button class="btn" id="btnRefresh" title="Refresh">⟳</button>
     <button class="btn" id="btnSettings" title="Settings / API keys">⚙︎</button>
   </header>
+
+  <div class="card hidden" id="tracksCard">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">Track library — 2026 NHRA tour</h2>
+      <button class="btn" id="btnNearestTrack">📍 Nearest track</button>
+    </div>
+    <input type="text" id="trackFilter" placeholder="Filter by name, city or state" autocomplete="off" style="margin-top:10px">
+    <div id="trackList" style="margin-top:6px"></div>
+    <div class="muted" style="margin-top:8px">Tap a track to load its weather. Set its track direction once (🔍 → Track direction) and it's remembered for that track.</div>
+  </div>
 
   <div class="card hidden" id="searchCard">
     <form id="searchForm"><input type="text" id="searchInput" placeholder="City, town, or track (e.g. Brownsburg)" autocomplete="off"></form>
@@ -1423,6 +1442,67 @@ $('btnSave').onclick = ()=>{
   }
   renderSaved();
 };
+/* ---------- track library (2026 NHRA Mission Foods Drag Racing Series venues) ---------- */
+const TRACKS = [
+  {id:'gainesville', name:'Gainesville Raceway', city:'Gainesville, FL', lat:29.75806, lon:-82.27472, ev:'Gatornationals', d:['2026-03-05','2026-03-08']},
+  {id:'firebird', name:'Firebird Motorsports Park', city:'Chandler, AZ', lat:33.26889, lon:-111.96611, ev:'Arizona Nationals', d:['2026-03-20','2026-03-22']},
+  {id:'pomona', name:'In-N-Out Burger Pomona Dragstrip', city:'Pomona, CA', lat:34.09509, lon:-117.76976, ev:'Winternationals · Finals', d:['2026-04-09','2026-04-12'], d2:['2026-11-12','2026-11-15']},
+  {id:'zmax', name:'zMAX Dragway', city:'Concord, NC', lat:35.36141, lon:-80.68727, ev:'4-Wide Nationals', d:['2026-04-24','2026-04-26']},
+  {id:'sgmp', name:'South Georgia Motorsports Park', city:'Adel, GA', lat:31.06478, lon:-83.39628, ev:'Southern Nationals', d:['2026-05-01','2026-05-03']},
+  {id:'route66', name:'Route 66 Raceway', city:'Joliet, IL', lat:41.4641, lon:-88.0751, ev:'Route 66 Nationals', d:['2026-05-14','2026-05-17']},
+  {id:'mir', name:'Maryland International Raceway', city:'Mechanicsville, MD', lat:38.39580, lon:-76.84542, ev:'Potomac Nationals', d:['2026-05-29','2026-05-31']},
+  {id:'ned', name:'New England Dragway', city:'Epping, NH', lat:43.02083, lon:-71.02722, ev:'New England Nationals', d:['2026-06-05','2026-06-07']},
+  {id:'bristol', name:'Bristol Dragway', city:'Bristol, TN', lat:36.517, lon:-82.249, ev:'Thunder Valley Nationals', d:['2026-06-12','2026-06-14']},
+  {id:'norwalk', name:'Summit Motorsports Park', city:'Norwalk, OH', lat:41.23528, lon:-82.54278, ev:'Summit Racing Nationals', d:['2026-06-25','2026-06-28']},
+  {id:'sonoma', name:'Sonoma Raceway', city:'Sonoma, CA', lat:38.16083, lon:-122.455, ev:'Sonoma Nationals', d:['2026-07-17','2026-07-19']},
+  {id:'pacific', name:'Pacific Raceways', city:'Kent, WA', lat:47.32006, lon:-122.14517, ev:'Northwest Nationals', d:['2026-07-24','2026-07-26']},
+  {id:'brainerd', name:'Brainerd International Raceway', city:'Brainerd, MN', lat:46.41707, lon:-94.27314, ev:'Brainerd Nationals', d:['2026-08-20','2026-08-23']},
+  {id:'irp', name:'Lucas Oil Indianapolis Raceway Park', city:'Brownsburg, IN', lat:39.81278, lon:-86.34083, ev:'U.S. Nationals', d:['2026-09-02','2026-09-07']},
+  {id:'us131', name:'US 131 Motorsports Park', city:'Martin, MI', lat:42.51204, lon:-85.66176, ev:'Great Lakes Nationals', d:['2026-09-17','2026-09-21']},
+  {id:'rockingham', name:'Rockingham Dragway', city:'Rockingham, NC', lat:34.97418, lon:-79.61042, ev:'Nationals at The Rock', d:['2026-09-25','2026-09-27']},
+  {id:'wwtr', name:'World Wide Technology Raceway', city:'Madison, IL', lat:38.6508, lon:-90.13537, ev:'Midwest Nationals', d:['2026-10-02','2026-10-04']},
+  {id:'motorplex', name:'Texas Motorplex', city:'Ennis, TX', lat:32.3286, lon:-96.7174, ev:'FallNationals', d:['2026-10-14','2026-10-18']},
+  {id:'lasvegas', name:'The Strip at Las Vegas Motor Speedway', city:'Las Vegas, NV', lat:36.27134, lon:-115.01112, ev:'Las Vegas Nationals', d:['2026-10-29','2026-11-01']}
+];
+const fmtRange = d => { const a = new Date(d[0]+'T12:00:00Z'), b = new Date(d[1]+'T12:00:00Z'), o = {month:'short', day:'numeric', timeZone:'UTC'};
+  return a.getUTCMonth()===b.getUTCMonth() ? a.toLocaleDateString('en-US',o)+'–'+b.getUTCDate() : a.toLocaleDateString('en-US',o)+' – '+b.toLocaleDateString('en-US',o); };
+function trackEvents(t){ return [t.d, t.d2].filter(Boolean); }
+function nextEventEnd(t){ const today = new Date().toISOString().slice(0,10); const up = trackEvents(t).filter(d=>d[1] >= today); return up.length ? up[0] : null; }
+function renderTracks(){
+  const f = ($('trackFilter').value||'').toLowerCase().trim();
+  const today = new Date().toISOString().slice(0,10);
+  const headings = store.get('trackHeadings', {});
+  // the next race on the calendar gets a badge
+  const nextT = TRACKS.map(t=>({t, n:nextEventEnd(t)})).filter(x=>x.n).sort((a,b)=>a.n[0]<b.n[0]?-1:1)[0];
+  const ST = {FL:'florida',AZ:'arizona',CA:'california',NC:'north carolina',GA:'georgia',IL:'illinois',MD:'maryland',NH:'new hampshire',TN:'tennessee',OH:'ohio',WA:'washington',MN:'minnesota',IN:'indiana',MI:'michigan',TX:'texas',NV:'nevada'};
+  const list = TRACKS.filter(t=>!f || (t.name+' '+t.city+' '+(ST[t.city.slice(-2)]||'')+' '+t.ev).toLowerCase().includes(f));
+  $('trackList').innerHTML = list.map(t=>{
+    const n = nextEventEnd(t), past = !n, here = state.place.trackId === t.id;
+    const live = n && n[0] <= today && today <= n[1];
+    const ev = trackEvents(t).map(d=>fmtRange(d)).join(' · ');
+    const badge = here ? '<span class="badge here">Showing</span>' : live ? '<span class="badge">Race weekend</span>' : (nextT && nextT.t===t) ? '<span class="badge">Next race</span>' : '';
+    return '<div class="trk'+(past?' past':'')+(here?' cur':'')+'" data-id="'+t.id+'"><div><div class="tn">'+esc(t.name)+'</div><div class="ts">'+esc(t.city)+' · '+esc(t.ev)+' · '+ev+(isNum(headings[t.id])?' · runs '+compass(headings[t.id]):'')+'</div></div>'+badge+'</div>';
+  }).join('') || '<div class="muted" style="padding:8px 0">No tracks match.</div>';
+}
+function loadTrack(t){
+  const headings = store.get('trackHeadings', {});
+  $('tracksCard').classList.add('hidden');
+  setPlace({name: t.name, lat: t.lat, lon: t.lon, trackId: t.id, heading: isNum(headings[t.id]) ? headings[t.id] : undefined});
+}
+$('trackList').onclick = e=>{ const r = e.target.closest('.trk'); if(r) loadTrack(TRACKS.find(t=>t.id===r.dataset.id)); };
+$('trackFilter').oninput = renderTracks;
+$('btnTracks').onclick = ()=>{ $('searchCard').classList.add('hidden'); $('tracksCard').classList.toggle('hidden'); $('trackFilter').value=''; renderTracks(); };
+$('btnNearestTrack').onclick = ()=>{
+  if(!navigator.geolocation){ $('btnNearestTrack').textContent = 'Location unavailable'; return; }
+  $('btnNearestTrack').textContent = 'Finding…';
+  navigator.geolocation.getCurrentPosition(pos=>{
+    const {latitude:la, longitude:lo} = pos.coords;
+    const best = TRACKS.map(t=>({t, mi: haversineMi(la, lo, t.lat, t.lon)})).sort((a,b)=>a.mi-b.mi)[0];
+    $('btnNearestTrack').textContent = '📍 Nearest track';
+    loadTrack(best.t);
+  }, err=>{ $('btnNearestTrack').textContent = 'Location blocked'; }, {timeout:15000, maximumAge:300000});
+};
+
 /* ---------- track direction ---------- */
 function renderTrackDir(){
   $('tdPlace').textContent = state.place.name;
@@ -1437,6 +1517,7 @@ function setHeading(h){
   const saved = store.get('saved', [DEFAULT_PLACE]);
   const m = saved.find(p=>Math.abs(p.lat-state.place.lat)<0.01 && Math.abs(p.lon-state.place.lon)<0.01);
   if(m){ m.heading = h; store.set('saved', saved); }
+  if(state.place.trackId){ const hs = store.get('trackHeadings', {}); if(isNum(h)) hs[state.place.trackId] = h; else delete hs[state.place.trackId]; store.set('trackHeadings', hs); }
   renderTrackDir();
   if(state.loadedAt) render();
 }
@@ -1478,7 +1559,7 @@ $('tdReset').onclick = tdResetPts;
 $('tdModalClose').onclick = ()=>$('tdModal').classList.add('hidden');
 $('tdUse').onclick = ()=>{ setHeading(tdm.heading); $('tdModal').classList.add('hidden'); };
 
-$('btnSearch').onclick = ()=>{ $('searchCard').classList.toggle('hidden'); renderSaved(); renderTrackDir(); if(!$('searchCard').classList.contains('hidden')) $('searchInput').focus(); };
+$('btnSearch').onclick = ()=>{ $('tracksCard').classList.add('hidden'); $('searchCard').classList.toggle('hidden'); renderSaved(); renderTrackDir(); if(!$('searchCard').classList.contains('hidden')) $('searchInput').focus(); };
 $('searchForm').onsubmit = async e=>{
   e.preventDefault();
   const q = $('searchInput').value.trim(); if(!q) return;
