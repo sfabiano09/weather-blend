@@ -150,6 +150,13 @@
 
   <div id="alerts"></div>
 
+  <div class="card hidden" id="rainCard">
+    <h2>Rain arrival <span class="muted" id="rainMeta" style="text-transform:none;letter-spacing:0"></span></h2>
+    <div id="rainHead" style="font-size:20px;font-weight:600"></div>
+    <div class="muted" id="rainSub" style="margin-top:2px"></div>
+    <div id="rainStrip" style="margin-top:10px"></div>
+  </div>
+
   <div class="card hidden" id="davisCard">
     <h2 id="davisTitle">Davis station — live</h2>
     <div class="now">
@@ -731,7 +738,7 @@ async function loadAll(){
   });
   const det = fetchDetail(lat, lon).then(d=>{ state.detail = d; }).catch(e=>{ state.detail = null; state.detailError = e.message; });
   const ens = fetchEnsembles(lat, lon).then(e=>{ state.ens = e; state.ensError = null; }).catch(e=>{ state.ens = null; state.ensError = e.message; });
-  await Promise.all([...jobs, det, ens, loadDavis()]);
+  await Promise.all([...jobs, det, ens, loadDavis(), loadNowcast()]);
   state.loading = false;
   state.loadedAt = Date.now();
   const bad = state.sources.filter(s=>s.status==='fail');
@@ -809,6 +816,76 @@ function renderAFD(){
   const para = t => esc(t).split('\n\n').map(p=>'<p style="margin:6px 0">'+p+'</p>').join('');
   $('afdBody').innerHTML = '<div style="font-size:14px"><b>'+esc(pick.title)+'</b>'+para(pick.body.length>900 ? pick.body.slice(0,900).replace(/\s\S*$/,'')+'…' : pick.body)+'</div>'+
     a.sections.filter(x=>x!==pick).map(x=>'<details style="margin-top:6px"><summary style="cursor:pointer;font-weight:600">'+esc(x.title)+(x.sub?' <span class="muted">('+esc(x.sub)+')</span>':'')+'</summary><div style="font-size:14px">'+para(x.body)+'</div></details>').join('');
+}
+
+/* ---------- rain arrival (15-minute HRRR nowcast) ---------- */
+const nowcast = {data:null, at:0, key:null, timer:null};
+async function fetchNowcast(lat, lon){
+  const u = 'https://api.open-meteo.com/v1/forecast?latitude='+lat+'&longitude='+lon+
+    '&minutely_15=precipitation,snowfall&forecast_minutely_15=24&past_minutely_15=1&precipitation_unit=inch&timezone=auto&timeformat=unixtime';
+  const j = await omJSON(u, 'nowcast:'+(+lat).toFixed(2)+','+(+lon).toFixed(2));
+  const m = j.minutely_15 || {};
+  return {staleAt: j.__staleAt || null, slots: (m.time||[]).map((t,i)=>({t:t*1000, p:m.precipitation[i], s:m.snowfall ? m.snowfall[i] : 0}))};
+}
+async function loadNowcast(){
+  const {lat, lon} = state.place;
+  try{ nowcast.data = await fetchNowcast(lat, lon); nowcast.at = Date.now(); nowcast.key = lat+','+lon; }
+  catch(e){ nowcast.data = null; nowcast.err = e.message; }
+}
+const WET = 0.004;   // inches per 15 min (~0.016"/hr) — anything below is a trace
+function intensity(p){ const r = p*4; return r < 0.1 ? 'light' : r < 0.3 ? 'moderate' : 'heavy'; }
+function renderRain(hours){
+  const card = $('rainCard'), n = nowcast.data;
+  if(!n || !n.slots.length){ card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  const now = Date.now();
+  const slots = n.slots.filter(x=>x.t + 15*60000 > now);       // current slot onward
+  if(!slots.length){ card.classList.add('hidden'); return; }
+  const dv = state.davis, davisRain = dv && isNum(dv.rainRate) && dv.rainRate > 0;
+  const rainingNow = davisRain || (isNum(slots[0].p) && slots[0].p >= WET);
+  const snowy = x => isNum(x.s) && x.s > 0;
+  const mins = t => Math.max(0, Math.round((t-now)/60000));
+  const inTxt = m => m < 60 ? m+' min' : Math.floor(m/60)+' hr'+(m%60 ? ' '+(m%60)+' min' : '');
+  let head = '', sub = '', when = null;
+  if(rainingNow){
+    const end = slots.findIndex((x,i)=>i>0 && (!isNum(x.p) || x.p < WET) && (!slots[i+1] || !isNum(slots[i+1].p) || slots[i+1].p < WET));
+    const kind = snowy(slots[0]) ? 'Snowing' : 'Raining';
+    head = '🌧️ '+kind+' now'+(davisRain ? ' at the station ('+dv.rainRate.toFixed(2)+'"/hr)' : '');
+    sub = end > 0 ? 'Expected to let up around <b>'+fmtClock(slots[end].t)+'</b> (in about '+inTxt(mins(slots[end].t))+').' : 'Expected to keep going for at least the next 6 hours.';
+  } else {
+    const k = slots.findIndex(x=>isNum(x.p) && x.p >= WET);
+    if(k >= 0){
+      when = slots[k].t;
+      const peak = Math.max(...slots.slice(k, k+8).map(x=>x.p||0));
+      head = (snowy(slots[k]) ? '🌨️ Snow' : '🌧️ Rain')+' arriving around '+fmtClock(when);
+      // how much do the other sources agree for that hour?
+      const h = hours.find(x=>x.t <= when && when < x.t + 3600000);
+      const bits = [];
+      if(h && h.nModels) bits.push(h.wetModels+' of '+h.nModels+' models show rain that hour');
+      if(h && h.ens && isNum(h.ens.rain)) bits.push('ensembles '+fmtPct(h.ens.rain));
+      if(h && isNum(h.pop)) bits.push('blend '+fmtPct(h.pop));
+      const weak = h && h.nModels && h.wetModels/h.nModels < 0.34 && (!h.ens || !isNum(h.ens.rain) || h.ens.rain < 30);
+      sub = 'In about <b>'+inTxt(mins(when))+'</b> · starts '+intensity(slots[k].p)+', peaking '+intensity(peak)+(bits.length ? '<br>'+bits.join(' · ') : '')+
+        (weak ? '<br>⚠️ Only the short-range HRRR shows it so far. Low confidence, so watch the radar.' : '');
+    } else {
+      head = '☀️ No rain expected in the next 6 hours';
+      const later = hours.find(x=>x.t > now + 6*3600000 && isNum(x.pop) && x.pop >= 50);
+      sub = later ? 'Next likely rain: <b>'+(dkey(later.t)===dkey(now) ? '' : dayLabel(dkey(later.t)).name+' ')+fmtHour(later.t)+'</b> (blend '+fmtPct(later.pop)+').' : 'Nothing likely in the next 2 days either.';
+    }
+  }
+  $('rainHead').innerHTML = head;
+  $('rainSub').innerHTML = sub;
+  $('rainMeta').textContent = '· HRRR 15-min forecast'+(n.staleAt ? ', from '+ago(n.staleAt)+' (offline)' : ', updated '+ago(nowcast.at).replace('0 min ago','just now'));
+  // 6-hr strip
+  const W = 24*14, H = 46, bw = 12, col = p => !isNum(p) || p < WET ? '#e5e7eb' : intensity(p)==='light' ? '#93c5fd' : intensity(p)==='moderate' ? '#2563eb' : '#7c3aed';
+  let svg = '<svg viewBox="0 0 '+(W+10)+' '+H+'" width="100%" style="max-width:520px;display:block;font:9px -apple-system,Segoe UI,sans-serif">';
+  slots.slice(0,24).forEach((x,i)=>{
+    const ht = !isNum(x.p) || x.p < WET ? 4 : Math.min(26, 6 + x.p*4*60);
+    svg += '<rect x="'+(i*14+2)+'" y="'+(30-ht)+'" width="'+bw+'" height="'+ht+'" rx="2" fill="'+col(x.p)+'"><title>'+fmtClock(x.t)+': '+(isNum(x.p)?(x.p*4).toFixed(2)+'"/hr':'–')+'</title></rect>';
+    if(i%4===0) svg += '<text x="'+(i*14+2)+'" y="42" fill="#6b7280">'+(i===0?'Now':fmtHour(x.t).replace(' ',''))+'</text>';
+  });
+  svg += '</svg><div class="legend" style="margin-top:2px"><span><i style="background:#93c5fd"></i>light</span><span><i style="background:#2563eb"></i>moderate</span><span><i style="background:#7c3aed"></i>heavy</span></div>';
+  $('rainStrip').innerHTML = svg;
 }
 
 /* ---------- race air & track wind ---------- */
@@ -1189,7 +1266,7 @@ $('days').addEventListener('click', e=>{
 function render(){
   const hours = buildHours(48), days = buildDays(7);
   renderPlace(); renderSources(); renderAlerts();
-  renderDavis(hours); renderAir(hours); renderNow(hours, days); renderSummary(hours, days); renderAFD();
+  renderRain(hours); renderDavis(hours); renderAir(hours); renderNow(hours, days); renderSummary(hours, days); renderAFD();
   renderCharts(hours); renderHourTable(hours); renderDays(days);
   const okN = okSources().length;
   $('updated').textContent = 'Updated '+new Date(state.loadedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})+' · '+okN+' sources blended';
@@ -1611,6 +1688,11 @@ $('clearCache').onclick = ()=>{ store.clearCache(); $('clearCache').textContent 
 setTab(store.get('tab','hourly'));
 loadAll();
 setInterval(()=>{ if(document.visibilityState==='visible' && Date.now()-(state.loadedAt||0) > 15*60000) loadAll(); }, 60000);
+setInterval(async ()=>{
+  if(document.visibilityState!=='visible' || !state.loadedAt || state.loading) return;
+  if(Date.now()-nowcast.at > 10*60000){ await loadNowcast(); if(keys().davis) await loadDavis(); }
+  const hours = buildHours(48); renderRain(hours); renderDavis(hours); renderAir(hours);
+}, 30000);
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible' && Date.now()-(state.loadedAt||0) > 15*60000) loadAll(); });
 </script>
 </body>
