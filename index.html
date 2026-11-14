@@ -219,7 +219,7 @@
       <ul class="summary" id="skySummary"><li class="muted">Loading…</li></ul>
       <div class="tablewrap" style="margin-top:10px"><div id="skyChart"></div></div>
       <div class="legend" style="margin-top:8px">
-        <span><i style="background:#94a3b8;height:10px;width:14px"></i>Gray = cloud at that height (darker = thicker)</span>
+        <span><i style="background:#6b7280;height:10px;width:14px"></i>Gray = cloud at that height (darker = thicker)</span>
         <span>➤ Arrow = direction the wind is carrying clouds (toward), number = mph</span>
         <span><i style="background:#2563eb"></i>&lt;20</span><span><i style="background:#16a34a"></i>20–40</span><span><i style="background:#d97706"></i>40–60</span><span><i style="background:#dc2626"></i>60+ mph</span>
       </div>
@@ -1258,7 +1258,7 @@ function renderSky(){
       '<feGaussianBlur in="SourceGraphic" stdDeviation="'+(hrW*1.1).toFixed(1)+' '+(RH*0.32).toFixed(1)+'" result="soft"/>'+
       '<feDisplacementMap in="soft" in2="noise" scale="16" xChannelSelector="R" yChannelSelector="G"/>'+
     '</filter></defs>';
-  svg += '<rect x="'+LW+'" y="'+TOP+'" width="'+plotW+'" height="'+plotH+'" fill="#eef1f7"/>';
+  svg += '<rect x="'+LW+'" y="'+TOP+'" width="'+plotW+'" height="'+plotH+'" fill="#ffffff"/>';
   let blobs = '';
   const iEnd = cols[cols.length-1];
   levels.forEach((l,r)=>{
@@ -1270,10 +1270,11 @@ function renderSky(){
       const a = Math.min(1, cc/100);
       // thicker cloud = darker and taller; thin cloud = pale wisp
       const hgt = RH*(0.55+0.6*a), yy = y + (RH-hgt)/2;
-      const shade = Math.round(240 - 105*a);
-      blobs += '<rect x="'+(x-1).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+(hrW+2).toFixed(1)+'" height="'+hgt.toFixed(1)+'" rx="6" fill="rgb('+shade+','+(shade+4)+','+(shade+12)+')" fill-opacity="'+(0.3+0.6*a).toFixed(2)+'"/>';
+      const shade = Math.round(200 - 115*a);
+      blobs += '<rect x="'+(x-1).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+(hrW+2).toFixed(1)+'" height="'+hgt.toFixed(1)+'" rx="6" fill="rgb('+shade+','+(shade+4)+','+(shade+12)+')" fill-opacity="'+(0.55+0.45*a).toFixed(2)+'"/>';
     }
   });
+  levels.forEach((l,r)=>{ if(r>0){ const y = TOP + r*RH; svg += '<line x1="'+LW+'" y1="'+y+'" x2="'+W+'" y2="'+y+'" stroke="#e5e7eb" stroke-dasharray="3 4"/>'; } });
   svg += '<g clip-path="url(#skyClip)"><g filter="url(#cloudFx)">'+blobs+'</g></g>';
 
   rowsAll.forEach((l,r)=>{
