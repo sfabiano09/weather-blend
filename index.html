@@ -855,11 +855,12 @@ function hourAir(h){
 function renderAir(hours){
   const H = state.place.heading;
   const dv = state.davis;
-  let air = null, src = '', wind = null;
+  let air = null, src = '', wind = null, dew = null, tF = null, rh = null;
   const dvNear = dv && dv.station && isNum(dv.station.lat) ? haversineMi(dv.station.lat, dv.station.lon, state.place.lat, state.place.lon) <= 15 : !!dv;
   if(dv && dvNear && isNum(dv.temp) && isNum(dv.humidity)){
     const pst = isNum(dv.pressureAbs) ? dv.pressureAbs : slToStation(dv.pressure, state.elevM);
     air = airCalc(dv.temp, dv.humidity, pst);
+    dew = dv.dewPoint; tF = dv.temp; rh = dv.humidity;
     src = '· live from '+((dv.station&&dv.station.name)||'Davis');
     wind = trackWind(dv.windSpeed, dv.windDir, H);
   }
@@ -867,6 +868,7 @@ function renderAir(hours){
     air = hourAir(hours[0]);
     src = '· from forecast (Davis not connected here)';
     const d = hours[0].d || {};
+    dew = d.dew; tF = isNum(d.temp) ? d.temp : hours[0].temp; rh = d.rh;
     wind = trackWind(isNum(d.wind)?d.wind:hours[0].wind, d.dir, H);
   }
   if(!air){ $('airStats').innerHTML = '<div class="muted">Not enough data yet.</div>'; $('airSrc').textContent=''; return; }
@@ -876,6 +878,11 @@ function renderAir(hours){
   st.push(stat('Density alt.', Math.round(air.da).toLocaleString()+' ft', da.length ? 'next 24h '+Math.round(Math.min(...da)).toLocaleString()+' to '+Math.round(Math.max(...da)).toLocaleString() : ''));
   st.push(stat('Air density', air.rad.toFixed(1)+'%', 'vs. standard day'));
   st.push(stat('Grains', air.grains.toFixed(0), 'water per lb of air'));
+  if(!isNum(dew) && isNum(tF) && isNum(rh) && rh > 0){   // Magnus formula if the source has no dew point
+    const tc = (tF-32)*5/9, g = Math.log(rh/100) + 17.62*tc/(243.12+tc);
+    dew = (243.12*g/(17.62-g))*9/5+32;
+  }
+  st.push(stat('Dew point', fmtT(dew), isNum(dew)&&isNum(tF) ? Math.round(tF-dew)+'° below air temp' : ''));
   st.push(stat('Vapor press.', air.vp.toFixed(3)+'"', 'inHg'));
   st.push(stat('Station press.', air.pst.toFixed(2)+'"', 'absolute, inHg'));
   st.push(stat('Track wind', isNum(H) ? twText(wind) : 'Set direction', isNum(H) ? 'track runs '+Math.round(H)+'° '+compass(H) : 'tap 🔍 → Track direction'));
