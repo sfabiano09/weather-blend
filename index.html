@@ -766,7 +766,7 @@ async function loadDavis(){
     d.wetBulb = isNum(raw.wet_bulb) ? raw.wet_bulb : null;
     // barometer offset of 0 means the "sea level" value is really station (absolute) pressure
     d.pressureIsAbs = isNum(raw.bar_offset) ? raw.bar_offset === 0 : (isNum(d.pressure) && isNum(d.pressureAbs) && Math.abs(d.pressure - d.pressureAbs) < 0.005);
-    state.davis = d; state.davisError = null;
+    state.davis = d; state.davisError = null; state.davisAt = Date.now();
   }catch(e){ state.davis = null; state.davisError = e.message; }
 }
 function haversineMi(a, b, c, d){
@@ -1699,7 +1699,9 @@ loadAll();
 setInterval(()=>{ if(document.visibilityState==='visible' && Date.now()-(state.loadedAt||0) > 15*60000) loadAll(); }, 60000);
 setInterval(async ()=>{
   if(document.visibilityState!=='visible' || !state.loadedAt || state.loading) return;
-  if(Date.now()-nowcast.at > 10*60000){ await loadNowcast(); if(keys().davis) await loadDavis(); }
+  if(Date.now()-nowcast.at > 10*60000) await loadNowcast();
+  // Davis: every 5 min while the app is on screen (the relay shares one WeatherLink call per 5 min across all phones)
+  if(keys().davis && Date.now()-(state.davisAt||0) > 5*60000) await loadDavis();
   const hours = buildHours(48); renderRain(hours); renderDavis(hours); renderAir(hours);
 }, 30000);
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible' && Date.now()-(state.loadedAt||0) > 15*60000) loadAll(); });
