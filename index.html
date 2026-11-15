@@ -1225,8 +1225,32 @@ function renderSummary(hours, days){
   $('overallConf').innerHTML = '<span class="conf '+overall+'">'+overall+' confidence (next 3 days)</span>';
 }
 
+// dotted line + day label at each midnight on the hourly charts
+let dayMarks = [];
+const dayLinesPlugin = {
+  id:'dayLines',
+  afterDatasetsDraw(chart){
+    const x = chart.scales.x, a = chart.chartArea, ctx = chart.ctx;
+    if(!x || !dayMarks.length) return;
+    ctx.save();
+    dayMarks.forEach(m=>{
+      const px = x.getPixelForValue(m.i);   // the 12 AM point
+      if(px < a.left || px > a.right) return;
+      ctx.strokeStyle = '#9ca3af'; ctx.lineWidth = 1.2; ctx.setLineDash([4,4]);
+      ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.stroke();
+      ctx.setLineDash([]); ctx.fillStyle = '#374151'; ctx.font = '600 11px -apple-system,Segoe UI,Roboto,sans-serif';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      const w = ctx.measureText(m.label).width;
+      ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillRect(px+3, a.top+2, w+6, 15);
+      ctx.fillStyle = '#374151'; ctx.fillText(m.label, px+6, a.top+4);
+    });
+    ctx.restore();
+  }
+};
+if(typeof Chart !== 'undefined') Chart.register(dayLinesPlugin);
 function renderCharts(hours){
   if(typeof Chart === 'undefined') return;
+  dayMarks = hours.map((h,i)=> i>0 && dkey(h.t)!==dkey(hours[i-1].t) ? {i, label: dayLabel(dkey(h.t)).sub} : null).filter(Boolean);
   Object.values(state.charts).forEach(c=>c.destroy()); state.charts = {};
   const labels = hours.map(h=>fmtHour(h.t));
   const tSources = okSources().filter(s=>s.temp && hours.some(h=>h.by[s.id] && isNum(h.by[s.id].temp)));
@@ -1376,6 +1400,7 @@ function renderSky(){
 
   // ---- meteogram (SVG)
   const LW = 92, CW = 46, RH = 34, TOP = 30;
+  const dayLinesSky = [];
   const rowsAll = [...levels, 'sfc'];
   const W = LW + cols.length*CW, H = TOP + rowsAll.length*RH + 4;
   let svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'" style="font:11px -apple-system,Segoe UI,Roboto,sans-serif;display:block">';
@@ -1386,6 +1411,12 @@ function renderSky(){
     svg += '<text x="'+(x+CW/2)+'" y="'+(newDay?11:22)+'" text-anchor="middle" fill="'+(newDay?'#111827':'#6b7280')+'" font-weight="'+(newDay?600:400)+'">'+(newDay ? dayLabel(dkey(d.getTime())).sub.split(' ')[0] : '')+'</text>';
     svg += '<text x="'+(x+CW/2)+'" y="24" text-anchor="middle" fill="#6b7280">'+lab+'</text>';
     if(c>0) svg += '<line x1="'+x+'" y1="'+(TOP+levels.length*RH)+'" x2="'+x+'" y2="'+(H-4)+'" stroke="#f1f5f9"/>';
+    if(c>0 && newDay){
+      // midnight falls between this column and the previous one (3-hr steps)
+      const prevT = h.time[cols[c-1]], mid = (()=>{ for(let t=prevT+3600; t<=h.time[i]; t+=3600) if(dkey(t*1000)!==dkey(prevT*1000)) return t; return h.time[i]; })();
+      const mx = LW + (c-1)*CW + CW/2 + (mid-prevT)/(3*3600)*CW;
+      dayLinesSky.push(mx);
+    }
   });
   // ---- clouds: hourly blobs, blurred and roughened so they read like Windy's cloud shapes
   const plotW = cols.length*CW, plotH = levels.length*RH, hrW = CW/3;
@@ -1414,6 +1445,7 @@ function renderSky(){
   levels.forEach((l,r)=>{ if(r>0){ const y = TOP + r*RH; svg += '<line x1="'+LW+'" y1="'+y+'" x2="'+W+'" y2="'+y+'" stroke="#e5e7eb" stroke-dasharray="3 4"/>'; } });
   svg += '<g clip-path="url(#skyClip)"><g filter="url(#cloudFx)">'+blobs+'</g></g>';
 
+  dayLinesSky.forEach(mx=>{ svg += '<line x1="'+mx.toFixed(1)+'" y1="'+(TOP-2)+'" x2="'+mx.toFixed(1)+'" y2="'+(H-4)+'" stroke="#6b7280" stroke-width="1.2" stroke-dasharray="4 4"/>'; });
   rowsAll.forEach((l,r)=>{
     const y = TOP + r*RH;
     const label = l==='sfc' ? 'Surface' : ftFmt(agl(l,i0))+' ft';
