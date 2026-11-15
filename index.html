@@ -11,6 +11,7 @@
 <meta name="theme-color" content="#f4f6f9">
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="icon" href="icon.png">
+<link rel="manifest" href="manifest.json">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
@@ -93,6 +94,14 @@
   .trk.cur{background:#eff6ff;border-radius:10px}
   .badge{font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;background:#dcfce7;color:#166534;white-space:nowrap}
   .badge.here{background:#dbeafe;color:#1e40af}
+  .sess{border-bottom:1px solid var(--line);padding:10px 0}
+  .sess:last-child{border-bottom:none}
+  .sess.past{opacity:.55}
+  .sess .sh{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .sess .sn{font-weight:700;font-size:16px}
+  .sess .sg{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:6px;margin-top:6px}
+  .sess .sg div{background:#f9fafb;border-radius:8px;padding:5px 7px;font-size:13px}
+  .sess .sg b{display:block;font-size:10.5px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.03em}
   .modal{position:fixed;inset:0;background:rgba(17,24,39,.45);display:flex;align-items:flex-end;justify-content:center;z-index:2000}
   .sheet{background:#fff;width:100%;max-width:560px;border-radius:16px 16px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));max-height:88vh;overflow:auto}
   .sheet label{display:block;font-weight:600;margin:12px 0 4px}
@@ -116,6 +125,8 @@
     <button class="btn" id="btnRefresh" title="Refresh">⟳</button>
     <button class="btn" id="btnSettings" title="Settings / API keys">⚙︎</button>
   </header>
+
+  <div id="offlineBar" class="hidden" style="margin-top:10px;background:#fef9c3;border:1px solid #fde047;color:#713f12;border-radius:12px;padding:8px 12px;font-size:13.5px"></div>
 
   <div class="card hidden" id="tracksCard">
     <div class="row" style="justify-content:space-between">
@@ -175,6 +186,24 @@
     <div class="muted" id="airNote" style="margin-top:8px"></div>
   </div>
 
+  <div class="card" id="sessCard">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">Sessions <span class="muted" id="sessWhere" style="text-transform:none;letter-spacing:0"></span></h2>
+      <button class="btn" id="sessAddBtn">＋ Add session</button>
+    </div>
+    <form id="sessForm" class="hidden" style="margin-top:10px">
+      <div class="row">
+        <input type="text" id="sessLabel" list="sessNames" placeholder="Q1" style="width:110px" autocomplete="off">
+        <datalist id="sessNames"><option>Q1</option><option>Q2</option><option>Q3</option><option>Q4</option><option>E1</option><option>E2</option><option>E3</option><option>Final</option><option>Test</option></datalist>
+        <input type="date" id="sessDate" style="padding:9px;border:1px solid var(--line);border-radius:10px;font-size:15px">
+        <input type="time" id="sessTime" style="padding:9px;border:1px solid var(--line);border-radius:10px;font-size:15px">
+        <button class="btn primary" type="submit">Add</button>
+      </div>
+      <div class="muted" style="margin-top:6px">Times are local time at the track (<span id="sessTz"></span>).</div>
+    </form>
+    <div id="sessList" style="margin-top:8px"></div>
+  </div>
+
   <div class="card">
     <div class="now">
       <div class="big" id="nowTemp">--°</div>
@@ -201,6 +230,19 @@
     <h2>Sources</h2>
     <div class="chips" id="sources"></div>
     <div class="muted" id="sourceMsg" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card hidden" id="scoreCard">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">Accuracy scorecard <span class="muted" id="scoreWhere" style="text-transform:none;letter-spacing:0"></span></h2>
+      <span class="row">
+        <select id="scoreLead"><option value="6">6 hr ahead</option><option value="24">24 hr ahead</option></select>
+        <select id="scoreWin"><option value="twoWeeks">Last 2 weeks</option><option value="last48h">Last 48 hrs</option></select>
+      </span>
+    </div>
+    <div class="tablewrap" style="margin-top:10px"><table id="scoreTable"></table></div>
+    <label class="muted" style="display:flex;gap:6px;align-items:center;margin-top:10px"><input type="checkbox" id="scoreBlend"> Let the blend learn: lean on the sources that have been most accurate here, and correct each one's usual warm/cool lean</label>
+    <div class="muted" id="scoreNote" style="margin-top:6px"></div>
   </div>
 
   <div class="tabs">
@@ -263,6 +305,8 @@
         <span class="muted" id="radarTime" style="min-width:80px;text-align:right"></span>
       </div>
       <label class="muted" style="display:inline-flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" id="radarSmooth" checked> Smooth radar when zoomed in</label>
+      <label class="muted" style="display:inline-flex;gap:6px;align-items:center;margin:8px 0 0 14px"><input type="checkbox" id="radarSat"> Satellite clouds (GOES)</label>
+      <div class="muted" id="satNote" style="margin-top:4px"></div>
       <div class="muted" id="radarWarn" style="margin-top:8px"></div>
     </div>
   </section>
@@ -424,6 +468,18 @@ async function omJSON(url, key, opts={}){
   const c = store.get(ck);
   if(c && Date.now()-c.at < 12*3600000){ c.data.__staleAt = c.at; c.data.__staleWhy = err.message; return c.data; }
   throw err;
+}
+// Non-Open-Meteo sources (NWS): remember the last good answer and fall back to it (up to 12 h) when offline
+async function keepJSON(url, key, opts={}){
+  try{
+    const d = await getJSON(url, opts);
+    try{ localStorage.setItem('wb:keep:'+key, JSON.stringify({at:Date.now(), data:d})); }catch(e){}
+    return d;
+  }catch(e){
+    const c = store.get('keep:'+key);
+    if(c && Date.now()-c.at < 12*3600000){ state.usedSaved = Math.min(state.usedSaved||Infinity, c.at); return c.data; }
+    throw e;
+  }
 }
 const ago = t => { const m = Math.round((Date.now()-t)/60000); return m < 60 ? m+' min ago' : Math.round(m/60)+' hr ago'; };
 async function cachedJSON(key, url, ttlMin){
@@ -654,12 +710,13 @@ function parseAFD(text){
 function mphFromText(s){ const n = String(s||'').match(/\d+/g); return n ? Math.max(...n.map(Number)) : null; }
 async function fetchNWS(lat, lon){
   const hdr = {headers:{Accept:'application/geo+json'}};
-  const p = await getJSON('https://api.weather.gov/points/'+lat.toFixed(4)+','+lon.toFixed(4), hdr);
+  const nk = lat.toFixed(2)+','+lon.toFixed(2);
+  const p = await keepJSON('https://api.weather.gov/points/'+lat.toFixed(4)+','+lon.toFixed(4), 'nwsp:'+nk, hdr);
   const pr = p.properties;
   const rl = pr.relativeLocation && pr.relativeLocation.properties;
   const [f, fh, al, afd] = await Promise.all([
-    getJSON(pr.forecast, hdr),
-    getJSON(pr.forecastHourly, hdr),
+    keepJSON(pr.forecast, 'nwsf:'+nk, hdr),
+    keepJSON(pr.forecastHourly, 'nwsh:'+nk, hdr),
     getJSON('https://api.weather.gov/alerts/active?point='+lat.toFixed(4)+','+lon.toFixed(4), hdr).catch(()=>({features:[]})),
     fetchAFD(pr.cwa || pr.gridId).catch(()=>null)
   ]);
@@ -746,6 +803,7 @@ async function loadAll(){
   renderPlace();
   $('updated').textContent = 'Updating…';
   state.sources = makeSources();
+  state.usedSaved = null;
   renderSources();
   const jobs = state.sources.filter(s=>!s.off).map(async s=>{
     try{
@@ -760,9 +818,10 @@ async function loadAll(){
   });
   const det = fetchDetail(lat, lon).then(d=>{ state.detail = d; }).catch(e=>{ state.detail = null; state.detailError = e.message; });
   const ens = fetchEnsembles(lat, lon).then(e=>{ state.ens = e; state.ensError = null; }).catch(e=>{ state.ens = null; state.ensError = e.message; });
-  await Promise.all([...jobs, det, ens, loadDavis(), loadNowcast()]);
+  await Promise.all([...jobs, det, ens, loadDavis(), loadNowcast(), loadScore()]);
   state.loading = false;
   state.loadedAt = Date.now();
+  renderOffline();
   const bad = state.sources.filter(s=>s.status==='fail');
   const stale = state.sources.filter(s=>s.status==='stale');
   $('updated').title = state.relayOm ? 'Forecasts via team relay' : '';
@@ -773,6 +832,19 @@ async function loadAll(){
     (!state.detail && state.detailError ? '⚠️ Open-Meteo blend failed: '+state.detailError : '');
   render();
 }
+
+function renderOffline(){
+  const bar = $('offlineBar');
+  const staleTimes = [state.usedSaved, state.detailStaleAt, ...state.sources.map(s=>s.staleAt)].filter(isNum);
+  const off = !navigator.onLine;
+  if(!off && !staleTimes.length && !(state.davis && state.davis.offline)){ bar.classList.add('hidden'); return; }
+  const oldest = staleTimes.length ? Math.min(...staleTimes) : null;
+  bar.textContent = (off ? '📴 No signal. ' : '🟡 Some sources aren\'t answering. ') +
+    (oldest ? 'Showing saved data from '+ago(oldest)+'. ' : '') + 'It updates on its own when the connection is back.';
+  bar.classList.remove('hidden');
+}
+window.addEventListener('online', ()=>{ renderOffline(); loadAll(); });
+window.addEventListener('offline', renderOffline);
 
 /* ---------- Davis station (via relay) ---------- */
 async function loadDavis(){
@@ -790,7 +862,12 @@ async function loadDavis(){
     // barometer offset of 0 means the "sea level" value is really station (absolute) pressure
     d.pressureIsAbs = isNum(raw.bar_offset) ? raw.bar_offset === 0 : (isNum(d.pressure) && isNum(d.pressureAbs) && Math.abs(d.pressure - d.pressureAbs) < 0.005);
     state.davis = d; state.davisError = null; state.davisAt = Date.now();
-  }catch(e){ state.davis = null; state.davisError = e.message; }
+    try{ localStorage.setItem('wb:davisLast', JSON.stringify(d)); }catch(e){}
+  }catch(e){
+    state.davisError = e.message;
+    const last = store.get('davisLast');
+    state.davis = last && last.ts && Date.now()-last.ts < 12*3600000 ? Object.assign(last, {offline:true}) : null;
+  }
 }
 function haversineMi(a, b, c, d){
   const R = 3958.8, toR = x=>x*Math.PI/180;
@@ -820,7 +897,7 @@ function renderDavis(hours){
     const mi = haversineMi(s.lat, s.lon, state.place.lat, state.place.lon);
     where = mi > 15 ? ' · station is '+Math.round(mi)+' mi from '+state.place.name : '';
   }
-  $('davisAge').textContent = (mins===null ? '' : mins<=1 ? 'Updated just now' : 'Updated '+mins+' min ago') + (mins>30 ? ' ⚠️ stale' : '') + where;
+  $('davisAge').textContent = (d.offline ? '📴 Saved reading · ' : '') + (mins===null ? '' : mins<=1 ? 'Updated just now' : 'Updated '+(mins<120 ? mins+' min' : Math.round(mins/60)+' hr')+' ago') + (mins>30 ? ' ⚠️ stale' : '') + where;
   const blendNow = hours[0] && hours[0].temp;
   if(isNum(d.temp) && isNum(blendNow) && !where){
     const diff = Math.round(d.temp - blendNow);
@@ -920,6 +997,78 @@ function renderRain(hours){
   $('rainStrip').innerHTML = svg;
 }
 
+/* ---------- session timeline ---------- */
+const placeKey = () => state.place.trackId || ((+state.place.lat).toFixed(2)+','+(+state.place.lon).toFixed(2));
+function tzOffsetMs(ms, tz){
+  const p = new Intl.DateTimeFormat('en-US',{timeZone:tz, hourCycle:'h23', year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}).formatToParts(new Date(ms));
+  const g = t => +p.find(x=>x.type===t).value;
+  return Date.UTC(g('year'), g('month')-1, g('day'), g('hour'), g('minute'), g('second')) - ms;
+}
+// "2026-11-15" + "11:30" as wall-clock time at the track -> epoch ms
+function trackTime(date, time, tz){
+  const [y,mo,d] = date.split('-').map(Number), [h,mi] = time.split(':').map(Number);
+  const wall = Date.UTC(y, mo-1, d, h, mi);
+  let t = wall - tzOffsetMs(wall, tz);
+  t = wall - tzOffsetMs(t, tz);
+  return t;
+}
+function getSessions(){ return (store.get('sessions', {})[placeKey()] || []).slice().sort((a,b)=>a.t-b.t); }
+function setSessions(list){ const all = store.get('sessions', {}); all[placeKey()] = list; store.set('sessions', all); }
+function renderSessions(longHours){
+  $('sessWhere').textContent = '· '+state.place.name;
+  $('sessTz').textContent = state.tz.replace(/_/g,' ');
+  const list = getSessions(), now = Date.now();
+  if(!list.length){ $('sessList').innerHTML = '<div class="muted">Add your qualifying and elimination times to see the forecast air, density altitude, correction factor and wind for each one.</div>'; return; }
+  const H = state.place.heading, nowAir = longHours[0] ? hourAir(longHours[0]) : null;
+  const fmtWhen = t => new Intl.DateTimeFormat('en-US',{timeZone:state.tz, weekday:'short', hour:'numeric', minute:'2-digit'}).format(new Date(t));
+  $('sessList').innerHTML = list.map(x=>{
+    const past = x.t < now - 30*60000;
+    const mins = Math.round((x.t-now)/60000);
+    const until = past ? 'done' : mins <= 0 ? 'now' : mins < 60 ? 'in '+mins+' min' : mins < 48*60 ? 'in '+Math.floor(mins/60)+' hr '+(mins%60)+' min' : 'in '+Math.round(mins/1440)+' days';
+    const h = longHours.find(y=>x.t >= y.t && x.t < y.t+3600000);
+    let body = '';
+    if(h && !past){
+      const d = h.d || {}, a = hourAir(h), tw = trackWind(isNum(d.wind)?d.wind:h.wind, d.dir, H);
+      const daDelta = a && nowAir ? Math.round(a.da - nowAir.da) : null;
+      body = '<div class="sg">'+
+        '<div><b>Air</b>'+fmtT(h.temp)+(isNum(h.tMin)&&Math.round(h.tMin)!==Math.round(h.tMax)?' <span class="muted">'+Math.round(h.tMin)+'–'+Math.round(h.tMax)+'</span>':'')+'</div>'+
+        '<div><b>Density alt.</b>'+(a?Math.round(a.da).toLocaleString()+' ft':'–')+(isNum(daDelta)&&Math.abs(daDelta)>=50?' <span class="muted">'+(daDelta>0?'+':'')+daDelta+' vs now</span>':'')+'</div>'+
+        '<div><b>Corr. factor</b>'+(a?a.cf.toFixed(3):'–')+'</div>'+
+        '<div><b>Grains</b>'+(a?Math.round(a.grains):'–')+'</div>'+
+        '<div><b>Humidity</b>'+fmtPct(d.rh)+'</div>'+
+        '<div><b>Wind</b>'+(isNum(H)&&tw ? twText(tw,true) : fmtMph(h.wind)+' '+compass(d.dir))+'</div>'+
+        '<div><b>Sun</b>'+(isNum(d.solar)?Math.round(d.solar)+' W/m²':'–')+' · '+fmtPct(d.cloud)+' cloud</div>'+
+        '<div><b>Rain</b>'+fmtPct(h.pop)+'</div></div>';
+    } else if(!past){
+      body = '<div class="muted" style="margin-top:4px">Forecast details show up within 7 days of the session.</div>';
+    }
+    return '<div class="sess'+(past?' past':'')+'"><div class="sh"><span><span class="sn">'+esc(x.label)+'</span> <span class="muted">'+fmtWhen(x.t)+'</span></span>'+
+      '<span><span class="muted">'+until+'</span> <button class="btn" data-del="'+x.id+'" style="padding:2px 8px;margin-left:6px" title="Remove">✕</button></span></div>'+body+'</div>';
+  }).join('');
+}
+$('sessAddBtn').onclick = ()=>{
+  const f = $('sessForm'); f.classList.toggle('hidden');
+  if(!f.classList.contains('hidden')){
+    const soon = new Date(Date.now() + 3600000);
+    if(!$('sessDate').value) $('sessDate').value = new Intl.DateTimeFormat('en-CA',{timeZone:state.tz, year:'numeric',month:'2-digit',day:'2-digit'}).format(soon);
+    if(!$('sessTime').value) $('sessTime').value = new Intl.DateTimeFormat('en-GB',{timeZone:state.tz, hour:'2-digit', hourCycle:'h23'}).format(soon).slice(0,2)+':00';
+    $('sessLabel').focus();
+  }
+};
+$('sessForm').onsubmit = e=>{
+  e.preventDefault();
+  const label = $('sessLabel').value.trim() || 'Session', date = $('sessDate').value, time = $('sessTime').value;
+  if(!date || !time) return;
+  const list = getSessions(); list.push({id: Date.now().toString(36), label, t: trackTime(date, time, state.tz)});
+  setSessions(list); $('sessLabel').value = ''; $('sessForm').classList.add('hidden');
+  renderSessions(state.longHours || buildHours(168));
+};
+$('sessList').onclick = e=>{
+  const b = e.target.closest('[data-del]'); if(!b) return;
+  setSessions(getSessions().filter(x=>x.id !== b.dataset.del));
+  renderSessions(state.longHours || buildHours(168));
+};
+
 /* ---------- race air & track wind ---------- */
 // tempF, RH %, station (absolute) pressure in inHg
 function airCalc(tF, rh, pInHg){
@@ -932,6 +1081,10 @@ function airCalc(tF, rh, pInHg){
   return {
     da: 145442.16*(1-Math.pow(ratio, 0.234969)),                      // density altitude, ft
     pa: 145366.45*(1-Math.pow(pInHg/29.92126, 0.190284)),             // pressure altitude, ft (pressure only)
+    // SAE J1349 correction factor (99 kPa dry air, 77°F): >1 means the engine makes less than standard
+    cf: 1.18*(990/pd)*Math.sqrt((tC+273)/298) - 0.18,
+    // older "STD" (SAE J607: 29.92" dry, 60°F) many racers still quote
+    cfStd: (29.92/(pd/33.8639))*Math.sqrt((tF+460)/520),
     rad: ratio*100,                                                    // relative air density %
     grains: 7000*0.62198*e/(P-e),                                      // grains of water per lb dry air
     vp: e/33.8639,                                                     // vapor pressure inHg
@@ -988,6 +1141,7 @@ function renderAir(hours){
   st.push(stat('Density alt.', Math.round(air.da).toLocaleString()+' ft', da.length ? 'next 24h '+Math.round(Math.min(...da)).toLocaleString()+' to '+Math.round(Math.max(...da)).toLocaleString() : ''));
   st.push(stat('Pressure alt.', Math.round(air.pa).toLocaleString()+' ft', 'from '+air.pst.toFixed(2)+'" absolute'));
   st.push(stat('Air density', air.rad.toFixed(1)+'%', 'vs. standard day'));
+  st.push(stat('SAE corr. factor', air.cf.toFixed(3), 'rel. HP '+(100/air.cf).toFixed(1)+'% · STD '+air.cfStd.toFixed(3)));
   st.push(stat('Grains', air.grains.toFixed(0), 'water per lb of air'));
   if(!isNum(dew) && isNum(tF) && isNum(rh) && rh > 0){   // Magnus formula if the source has no dew point
     const tc = (tF-32)*5/9, g = Math.log(rh/100) + 17.62*tc/(243.12+tc);
@@ -1001,6 +1155,64 @@ function renderAir(hours){
   $('airNote').textContent = (state.elevM ? 'Elevation '+Math.round(state.elevM*3.281).toLocaleString()+' ft. ' : '') + 'Standard day = 59°F, 29.92", dry air = 0 ft / 100%.';
 }
 
+/* ---------- accuracy scorecard ---------- */
+const score = {data:null, err:null, lead:'6', win:'twoWeeks'};
+async function loadScore(){
+  const base = keys().davis; if(!base){ score.data = null; return; }
+  try{ const r = await fetch(base + '/score'); const j = await r.json(); score.data = j.error ? null : j; score.err = j.error || null; }
+  catch(e){ score.data = null; score.err = e.message; }
+}
+// weights + bias corrections from the 6-hr scorecard, only near the station and once there's enough data
+function scoreAdjust(){
+  const sd = score.data;
+  if(!sd || !store.get('scoreBlend', true) || !sd.station || !sd.station.loc) return null;
+  const [la, lo] = sd.station.loc.split(',').map(Number);
+  if(haversineMi(la, lo, state.place.lat, state.place.lon) > 15) return null;
+  const rows = (sd.leads['6'] || {}).twoWeeks || {};
+  const ok = Object.entries(rows).filter(([id, v])=>id !== 'blend' && v.n >= 24 && isNum(v.mae));
+  if(ok.length < 3) return null;
+  const adj = {};
+  ok.forEach(([id, v])=>{ adj[id] = {w: 1/Math.pow(v.mae + 0.5, 2), bias: v.bias}; });
+  const ws = Object.values(adj).map(a=>a.w).sort((a,b)=>a-b), wMed = ws[Math.floor(ws.length/2)];
+  return {adj, wMed};
+}
+// blend a list of [sourceId, value]: plain median, or accuracy-weighted with each source's usual lean removed
+function blendVals(pairs, A){
+  const vals = pairs.filter(([,v])=>isNum(v));
+  if(!A) return median(vals.map(([,v])=>v));
+  if(!vals.length) return null;
+  let sw = 0, sv = 0;
+  vals.forEach(([id, v])=>{ const a = A.adj[id]; const w = a ? a.w : A.wMed; sw += w; sv += w*(v - (a ? a.bias : 0)); });
+  return sv/sw;
+}
+
+function renderScore(){
+  const card = $('scoreCard');
+  if(!keys().davis){ card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  $('scoreBlend').checked = store.get('scoreBlend', true);
+  const sd = score.data;
+  if(!sd){
+    $('scoreWhere').textContent = '';
+    $('scoreTable').innerHTML = '';
+    $('scoreNote').innerHTML = 'Collecting. Each hour the relay saves every source\'s forecast, then checks it against Tasca1 when that hour comes. The first scores show up about 6 hours after the hourly check is turned on in Cloudflare, and they get trustworthy after a couple of days.'+(score.err && !/No scores yet/.test(score.err) ? '<br>('+esc(score.err)+')' : '');
+    return;
+  }
+  const st = sd.station || {};
+  $('scoreWhere').textContent = '· vs '+(st.name||'station')+(st.city ? ' ('+st.city+(st.region?', '+st.region:'')+')' : '');
+  const rows = Object.entries(((sd.leads||{})[score.lead]||{})[score.win] || {}).filter(([,v])=>v.n>0).sort((a,b)=>a[1].mae-b[1].mae);
+  const nameOf = id => id==='blend' ? 'The blend' : (state.sources.find(s=>s.id===id)||{}).name || id;
+  const colOf = id => id==='blend' ? '#111827' : (state.sources.find(s=>s.id===id)||{}).color || '#9ca3af';
+  const lean = b => !isNum(b) ? '–' : Math.abs(b) < 0.75 ? 'on target' : 'runs '+Math.abs(b).toFixed(1)+'° '+(b>0?'warm':'cool');
+  $('scoreTable').innerHTML = rows.length ? '<thead><tr><th>#</th><th>Source</th><th>Temp error</th><th>Lean</th><th>Humidity</th><th>Wind</th><th>Checks</th></tr></thead><tbody>'+
+    rows.map(([id,v],i)=>'<tr'+(id==='blend'?' style="font-weight:700;background:#f9fafb"':'')+'><td>'+(i+1)+'</td><td><i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+colOf(id)+';margin-right:6px"></i>'+esc(nameOf(id))+'</td>'+
+      '<td>±'+v.mae.toFixed(1)+'°</td><td>'+lean(v.bias)+'</td><td>'+(isNum(v.maeRh)&&v.maeRh>0?'±'+Math.round(v.maeRh)+'%':'–')+'</td><td>'+(isNum(v.maeW)&&v.maeW>0?'±'+v.maeW.toFixed(1)+' mph':'–')+'</td><td>'+v.n+'</td></tr>').join('')+'</tbody>'
+    : '<tbody><tr><td class="muted">No checks in this window yet.</td></tr></tbody>';
+  const A = scoreAdjust(), near = st.loc ? haversineMi(+st.loc.split(',')[0], +st.loc.split(',')[1], state.place.lat, state.place.lon) <= 15 : false;
+  $('scoreNote').textContent = 'Average miss between each source\'s forecast and what '+(st.name||'the station')+' measured. Scores are for the station\'s location'+(st.city?' ('+st.city+')':'')+'. ' +
+    ($('scoreBlend').checked ? (A ? 'The blend is using these scores right now.' : near ? 'The blend will start using these after about a day of checks.' : 'The blend only uses them near the station.') : '');
+}
+
 /* ---------- blending ---------- */
 function hourIndex(s){
   if(!s._hi){ s._hi = new Map(); for(const h of s.hourly) s._hi.set(Math.floor(h.t/3600000), h); }
@@ -1009,6 +1221,7 @@ function hourIndex(s){
 function okSources(){ return state.sources.filter(s=>s.status==='ok' || s.status==='stale'); }
 
 function buildHours(n=48){
+  const A = scoreAdjust();
   const start = Math.floor(Date.now()/3600000)*3600000;
   const det = state.detail ? new Map(state.detail.hourly.map(h=>[Math.floor(h.t/3600000), h])) : new Map();
   const out = [];
@@ -1017,14 +1230,15 @@ function buildHours(n=48){
     const by = {};
     for(const s of okSources()){ const r = hourIndex(s).get(k); if(r) by[s.id] = r; }
     const d = det.get(k) || {};
-    const temps = okSources().filter(s=>s.temp).map(s=>by[s.id]&&by[s.id].temp);
+    const tPairs = okSources().filter(s=>s.temp).map(s=>[s.id, by[s.id]&&by[s.id].temp]);
+    const temps = tPairs.map(p=>p[1]);
     const e = ensHour(state.ens, k);
     const pops = [...okSources().filter(s=>s.pop).map(s=>by[s.id]&&by[s.id].pop), d.pop, e && e.rain];
     const precs = okSources().filter(s=>s.model).map(s=>by[s.id]&&by[s.id].precip);
     const gusts = [...okSources().map(s=>by[s.id]&&by[s.id].gust)];
     const winds = [...okSources().map(s=>by[s.id]&&by[s.id].wind)];
     out.push({t, by, d, ens: e,
-      temp: median(temps), tMin: minOf(temps), tMax: maxOf(temps), nTemp: temps.filter(isNum).length,
+      temp: blendVals(tPairs, A), tMin: minOf(temps), tMax: maxOf(temps), nTemp: temps.filter(isNum).length,
       pop: median(pops), popMin: minOf(pops), popMax: maxOf(pops),
       precip: median(precs), wetModels: precs.filter(v=>isNum(v)&&v>=0.01).length, nModels: precs.filter(isNum).length,
       gust: median(gusts), gustMax: maxOf(gusts), wind: median(winds)
@@ -1034,6 +1248,7 @@ function buildHours(n=48){
 }
 
 function buildDays(n=7){
+  const A = scoreAdjust();
   const today = dkey(Date.now());
   const detDaily = state.detail ? new Map(state.detail.daily.map(d=>[dkey(d.ms), d])) : new Map();
   const days = [];
@@ -1047,13 +1262,14 @@ function buildDays(n=7){
     const dd = detDaily.get(key) || {};
     const ts = okSources().filter(s=>s.temp);
     const his = ts.map(s=>by[s.id]&&by[s.id].hi), los = ts.map(s=>by[s.id]&&by[s.id].lo);
+    const hiP = ts.map(s=>[s.id, by[s.id]&&by[s.id].hi]), loP = ts.map(s=>[s.id, by[s.id]&&by[s.id].lo]);
     const ed = ensDay(state.ens, key);
     const pops = [...okSources().filter(s=>s.pop).map(s=>by[s.id]&&by[s.id].pop), dd.pop, ed && ed.rain];
     const precs = okSources().filter(s=>s.model).map(s=>by[s.id]&&by[s.id].precip);
     const gusts = okSources().map(s=>by[s.id]&&by[s.id].gust);
     const day = {key, by, dd,
-      hi: median(his), hiMin: minOf(his), hiMax: maxOf(his),
-      lo: median(los), loMin: minOf(los), loMax: maxOf(los),
+      hi: blendVals(hiP, A), hiMin: minOf(his), hiMax: maxOf(his),
+      lo: blendVals(loP, A), loMin: minOf(los), loMax: maxOf(los),
       pop: median(pops), popMin: minOf(pops), popMax: maxOf(pops),
       precip: median(precs), wet: precs.filter(v=>isNum(v)&&v>=0.02).length, nModels: precs.filter(isNum).length,
       gust: median(gusts),
@@ -1322,9 +1538,10 @@ $('days').addEventListener('click', e=>{
 });
 
 function render(){
-  const hours = buildHours(48), days = buildDays(7);
-  renderPlace(); renderSources(); renderAlerts();
-  renderRain(hours); renderDavis(hours); renderAir(hours); renderNow(hours, days); renderSummary(hours, days); renderAFD();
+  const longHours = buildHours(168), hours = longHours.slice(0,48), days = buildDays(7);
+  state.longHours = longHours;
+  renderPlace(); renderSources(); renderAlerts(); renderScore();
+  renderRain(hours); renderDavis(hours); renderAir(hours); renderSessions(longHours); renderNow(hours, days); renderSummary(hours, days); renderAFD();
   renderCharts(hours); renderHourTable(hours); renderDays(days);
   const okN = okSources().length;
   $('updated').textContent = 'Updated '+new Date(state.loadedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})+' · '+okN+' sources blended'+(state.relayOm ? ' · via team relay' : '');
@@ -1490,6 +1707,7 @@ async function initRadar(){
     radar.map.createPane('radar'); radar.map.getPane('radar').style.zIndex = 400;
     radar.map.on('zoomend', smoothRadar);
     smoothRadar();
+    radar.map.createPane('sat'); radar.map.getPane('sat').style.zIndex = 350;
   }
   setTimeout(()=>radar.map.invalidateSize(), 50);
   // rebuild the loop at most every 4 minutes (IEM updates every 5)
@@ -1504,6 +1722,20 @@ async function initRadar(){
     playRadar(true);
   }
   loadWarnings();
+  updateSatellite();
+}
+// NASA GIBS: GOES GeoColor (true color by day, infrared clouds at night), ~40 min behind real time
+function updateSatellite(){
+  if(!radar.map) return;
+  const on = $('radarSat').checked;
+  const sat = state.place.lon < -105 ? 'GOES-West' : 'GOES-East';
+  if(radar.sat && (!on || radar.satName !== sat)){ radar.map.removeLayer(radar.sat); radar.sat = null; }
+  if(on && !radar.sat){
+    radar.satName = sat;
+    radar.sat = L.tileLayer('https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/'+sat+'_ABI_GeoColor/default/default/GoogleMapsCompatible_Level7/{z}/{y}/{x}.png',
+      {maxNativeZoom:7, maxZoom:13, opacity:0.9, pane:'sat', attribution:'Satellite: NASA GIBS / NOAA '+sat+' GeoColor'}).addTo(radar.map);
+  }
+  $('satNote').textContent = on ? 'Latest '+sat+' image (about 30–40 min behind). Shows clouds that aren\'t raining yet. True color by day, infrared at night.' : '';
 }
 // The composite is ~1 km squares: blur it a little more each zoom level past 7 so it reads as rain, not blocks
 function smoothRadar(){
@@ -1541,6 +1773,8 @@ function playRadar(on){
 $('radarPlay').onclick = ()=>playRadar(!radar.timer);
 $('radarSmooth').onchange = ()=>{ store.set('radarSmooth', $('radarSmooth').checked); smoothRadar(); };
 $('radarSmooth').checked = store.get('radarSmooth', true);
+$('radarSat').checked = store.get('radarSat', false);
+$('radarSat').onchange = ()=>{ store.set('radarSat', $('radarSat').checked); updateSatellite(); };
 $('radarSlider').oninput = e=>{ playRadar(false); showFrame(+e.target.value); };
 
 /* ---------- windy ---------- */
@@ -1750,6 +1984,13 @@ $('settingsSave').onclick = ()=>{
 };
 $('clearCache').onclick = ()=>{ store.clearCache(); $('clearCache').textContent = 'Cleared ✓'; };
 
+$('scoreLead').onchange = e=>{ score.lead = e.target.value; renderScore(); };
+$('scoreWin').onchange = e=>{ score.win = e.target.value; renderScore(); };
+$('scoreBlend').onchange = e=>{ store.set('scoreBlend', e.target.checked); render(); };
+
+/* ---------- offline support ---------- */
+if('serviceWorker' in navigator && location.protocol === 'https:'){ navigator.serviceWorker.register('sw.js').catch(()=>{}); }
+
 /* ---------- go ---------- */
 setTab(store.get('tab','hourly'));
 loadAll();
@@ -1760,6 +2001,7 @@ setInterval(async ()=>{
   // Davis: every 5 min while the app is on screen (the relay shares one WeatherLink call per 5 min across all phones)
   if(keys().davis && Date.now()-(state.davisAt||0) > 5*60000) await loadDavis();
   const hours = buildHours(48); renderRain(hours); renderDavis(hours); renderAir(hours);
+  if(state.longHours) renderSessions(state.longHours);
 }, 30000);
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible' && Date.now()-(state.loadedAt||0) > 15*60000) loadAll(); });
 </script>
