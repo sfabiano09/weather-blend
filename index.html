@@ -931,6 +931,7 @@ function airCalc(tF, rh, pInHg){
   const ratio = rho/1.225;
   return {
     da: 145442.16*(1-Math.pow(ratio, 0.234969)),                      // density altitude, ft
+    pa: 145366.45*(1-Math.pow(pInHg/29.92126, 0.190284)),             // pressure altitude, ft (pressure only)
     rad: ratio*100,                                                    // relative air density %
     grains: 7000*0.62198*e/(P-e),                                      // grains of water per lb dry air
     vp: e/33.8639,                                                     // vapor pressure inHg
@@ -985,6 +986,7 @@ function renderAir(hours){
   const da = hours.slice(0,24).map(hourAir).filter(Boolean).map(a=>a.da);
   const st = [];
   st.push(stat('Density alt.', Math.round(air.da).toLocaleString()+' ft', da.length ? 'next 24h '+Math.round(Math.min(...da)).toLocaleString()+' to '+Math.round(Math.max(...da)).toLocaleString() : ''));
+  st.push(stat('Pressure alt.', Math.round(air.pa).toLocaleString()+' ft', 'from '+air.pst.toFixed(2)+'" absolute'));
   st.push(stat('Air density', air.rad.toFixed(1)+'%', 'vs. standard day'));
   st.push(stat('Grains', air.grains.toFixed(0), 'water per lb of air'));
   if(!isNum(dew) && isNum(tF) && isNum(rh) && rh > 0){   // Magnus formula if the source has no dew point
