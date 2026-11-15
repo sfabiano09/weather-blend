@@ -96,7 +96,7 @@
   .badge.here{background:#dbeafe;color:#1e40af}
   .sess{border-bottom:1px solid var(--line);padding:10px 0}
   .sess:last-child{border-bottom:none}
-  .sess.past{opacity:.55}
+  .sess.past{opacity:.6;filter:grayscale(1)}
   .sess .sh{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
   .sess .sn{font-weight:700;font-size:16px}
   .sess .sg{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:6px;margin-top:6px}
@@ -1014,33 +1014,74 @@ function trackTime(date, time, tz){
 }
 function getSessions(){ return (store.get('sessions', {})[placeKey()] || []).slice().sort((a,b)=>a.t-b.t); }
 function setSessions(list){ const all = store.get('sessions', {}); all[placeKey()] = list; store.set('sessions', all); }
+// one set of numbers for a session, from a forecast hour or from the Davis
+function sessSnapFromHour(h, H){
+  const d = h.d || {}, a = hourAir(h), tw = trackWind(isNum(d.wind)?d.wind:h.wind, d.dir, H);
+  return {src:'fc', at:Date.now(), air:h.temp, lo:h.tMin, hi:h.tMax, da:a?a.da:null, cf:a?a.cf:null, grains:a?a.grains:null,
+    rh:d.rh, wind: isNum(H)&&tw ? twText(tw,true) : (isNum(h.wind)?Math.round(h.wind)+' '+compass(d.dir):'–'),
+    solar:d.solar, cloud:d.cloud, pop:h.pop};
+}
+function sessSnapFromDavis(dv, H){
+  const pst = isNum(dv.pressureAbs) ? dv.pressureAbs : dv.pressureIsAbs ? dv.pressure : slToStation(dv.pressure, state.elevM);
+  const a = airCalc(dv.temp, dv.humidity, pst), tw = trackWind(dv.windSpeed, dv.windDir, H);
+  return {src:'obs', at:dv.ts, name:(dv.station&&dv.station.name)||'Davis', air:dv.temp, da:a?a.da:null, cf:a?a.cf:null, grains:a?a.grains:null,
+    rh:dv.humidity, wind: isNum(H)&&tw ? twText(tw,true) : (isNum(dv.windSpeed)?Math.round(dv.windSpeed)+' '+compass(dv.windDir):'–'),
+    solar:dv.solar, rainRate:dv.rainRate};
+}
+function sessCells(n, extra){
+  const fT = v => isNum(v) ? Math.round(v)+'°' : '–';
+  return '<div class="sg">'+
+    '<div><b>Air</b>'+fT(n.air)+(isNum(n.lo)&&isNum(n.hi)&&Math.round(n.lo)!==Math.round(n.hi)?' <span class="muted">'+Math.round(n.lo)+'–'+Math.round(n.hi)+'</span>':'')+'</div>'+
+    '<div><b>Density alt.</b>'+(isNum(n.da)?Math.round(n.da).toLocaleString()+' ft':'–')+(extra&&extra.daDelta?' <span class="muted">'+extra.daDelta+'</span>':'')+'</div>'+
+    '<div><b>Corr. factor</b>'+(isNum(n.cf)?n.cf.toFixed(3):'–')+'</div>'+
+    '<div><b>Grains</b>'+(isNum(n.grains)?Math.round(n.grains):'–')+'</div>'+
+    '<div><b>Humidity</b>'+fmtPct(n.rh)+'</div>'+
+    '<div><b>Wind</b>'+esc(n.wind||'–')+'</div>'+
+    '<div><b>Sun</b>'+(isNum(n.solar)?Math.round(n.solar)+' W/m²':'–')+(isNum(n.cloud)?' · '+fmtPct(n.cloud)+' cloud':'')+'</div>'+
+    (n.src==='obs' ? '<div><b>Rain</b>'+(isNum(n.rainRate)&&n.rainRate>0 ? n.rainRate.toFixed(2)+'"/hr' : 'none')+'</div>' : '<div><b>Rain chance</b>'+fmtPct(n.pop)+'</div>')+
+    '</div>';
+}
 function renderSessions(longHours){
   $('sessWhere').textContent = '· '+state.place.name;
   $('sessTz').textContent = state.tz.replace(/_/g,' ');
   const list = getSessions(), now = Date.now();
-  if(!list.length){ $('sessList').innerHTML = '<div class="muted">Add your qualifying and elimination times to see the forecast air, density altitude, correction factor and wind for each one.</div>'; return; }
+  if(!list.length){ $('sessList').innerHTML = '<div class="muted">Add your qualifying and elimination times to see the forecast air, density altitude, correction factor and wind for each one. Finished sessions stay on the list, grayed out, so you can compare later.</div>'; return; }
   const H = state.place.heading, nowAir = longHours[0] ? hourAir(longHours[0]) : null;
+  const dv = state.davis, sta = dv && dv.station;
+  const davisHere = dv && !dv.offline && isNum(dv.temp) && isNum(dv.ts) && now - dv.ts < 15*60000 &&
+    (!sta || !isNum(sta.lat) || haversineMi(sta.lat, sta.lon, state.place.lat, state.place.lon) <= 15);
+  let changed = false;
+  // keep each session's numbers: the latest forecast while it's upcoming, and the station's actual reading at session time
+  list.forEach(x=>{
+    if(x.t > now - 30*60000){
+      const h = longHours.find(y=>x.t >= y.t && x.t < y.t+3600000);
+      if(h){ x.fc = sessSnapFromHour(h, H); changed = true; }
+    }
+    if(davisHere && Math.abs(dv.ts - x.t) <= 15*60000 && (!x.obs || Math.abs(dv.ts - x.t) < Math.abs(x.obs.at - x.t))){
+      x.obs = sessSnapFromDavis(dv, H); changed = true;
+    }
+  });
+  if(changed) setSessions(list);
   const fmtWhen = t => new Intl.DateTimeFormat('en-US',{timeZone:state.tz, weekday:'short', hour:'numeric', minute:'2-digit'}).format(new Date(t));
+  const fmtClk = t => new Intl.DateTimeFormat('en-US',{timeZone:state.tz, hour:'numeric', minute:'2-digit'}).format(new Date(t));
   $('sessList').innerHTML = list.map(x=>{
     const past = x.t < now - 30*60000;
     const mins = Math.round((x.t-now)/60000);
     const until = past ? 'done' : mins <= 0 ? 'now' : mins < 60 ? 'in '+mins+' min' : mins < 48*60 ? 'in '+Math.floor(mins/60)+' hr '+(mins%60)+' min' : 'in '+Math.round(mins/1440)+' days';
-    const h = longHours.find(y=>x.t >= y.t && x.t < y.t+3600000);
     let body = '';
-    if(h && !past){
-      const d = h.d || {}, a = hourAir(h), tw = trackWind(isNum(d.wind)?d.wind:h.wind, d.dir, H);
-      const daDelta = a && nowAir ? Math.round(a.da - nowAir.da) : null;
-      body = '<div class="sg">'+
-        '<div><b>Air</b>'+fmtT(h.temp)+(isNum(h.tMin)&&Math.round(h.tMin)!==Math.round(h.tMax)?' <span class="muted">'+Math.round(h.tMin)+'–'+Math.round(h.tMax)+'</span>':'')+'</div>'+
-        '<div><b>Density alt.</b>'+(a?Math.round(a.da).toLocaleString()+' ft':'–')+(isNum(daDelta)&&Math.abs(daDelta)>=50?' <span class="muted">'+(daDelta>0?'+':'')+daDelta+' vs now</span>':'')+'</div>'+
-        '<div><b>Corr. factor</b>'+(a?a.cf.toFixed(3):'–')+'</div>'+
-        '<div><b>Grains</b>'+(a?Math.round(a.grains):'–')+'</div>'+
-        '<div><b>Humidity</b>'+fmtPct(d.rh)+'</div>'+
-        '<div><b>Wind</b>'+(isNum(H)&&tw ? twText(tw,true) : fmtMph(h.wind)+' '+compass(d.dir))+'</div>'+
-        '<div><b>Sun</b>'+(isNum(d.solar)?Math.round(d.solar)+' W/m²':'–')+' · '+fmtPct(d.cloud)+' cloud</div>'+
-        '<div><b>Rain</b>'+fmtPct(h.pop)+'</div></div>';
+    if(x.obs){
+      body = '<div class="muted" style="margin-top:6px;font-size:12px">📡 Actual · '+esc(x.obs.name||'Davis')+' at '+fmtClk(x.obs.at)+'</div>'+sessCells(x.obs);
+      if(x.fc) body += '<div class="muted" style="margin-top:4px;font-size:12px">Forecast was: '+(isNum(x.fc.air)?Math.round(x.fc.air)+'°':'–')+
+        ' · DA '+(isNum(x.fc.da)?Math.round(x.fc.da).toLocaleString()+' ft':'–')+' · CF '+(isNum(x.fc.cf)?x.fc.cf.toFixed(3):'–')+' · '+(isNum(x.fc.grains)?Math.round(x.fc.grains)+' gr':'–')+
+        (isNum(x.fc.da)&&isNum(x.obs.da) ? ' <b>(DA off by '+Math.abs(Math.round(x.obs.da-x.fc.da)).toLocaleString()+' ft)</b>' : '')+'</div>';
+    } else if(x.fc){
+      const daDelta = !past && nowAir && isNum(x.fc.da) ? Math.round(x.fc.da - nowAir.da) : null;
+      body = (past ? '<div class="muted" style="margin-top:6px;font-size:12px">🗒 Last forecast before the session (no station reading saved)</div>' : '')+
+        sessCells(x.fc, {daDelta: isNum(daDelta)&&Math.abs(daDelta)>=50 ? (daDelta>0?'+':'')+daDelta+' vs now' : ''});
     } else if(!past){
       body = '<div class="muted" style="margin-top:4px">Forecast details show up within 7 days of the session.</div>';
+    } else {
+      body = '<div class="muted" style="margin-top:4px">No numbers saved for this one.</div>';
     }
     return '<div class="sess'+(past?' past':'')+'"><div class="sh"><span><span class="sn">'+esc(x.label)+'</span> <span class="muted">'+fmtWhen(x.t)+'</span></span>'+
       '<span><span class="muted">'+until+'</span> <button class="btn" data-del="'+x.id+'" style="padding:2px 8px;margin-left:6px" title="Remove">✕</button></span></div>'+body+'</div>';
